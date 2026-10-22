@@ -1,0 +1,10 @@
+[Unit]
+Description=Idea Echo verified daily backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/idea-echo
+ExecStart=/bin/sh -c 'docker compose --env-file deploy/.env -f deploy/compose.yaml exec -T api python -m idea_echo.backup create --file /backups/idea-echo-$(date +%%Y%%m%%dT%%H%%M%%S).zip'
+ExecStart=/usr/bin/docker compose --env-file deploy/.env -f deploy/compose.yaml exec -T api python -m idea_echo.backup rotate --directory /backups

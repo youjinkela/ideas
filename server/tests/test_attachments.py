@@ -61,3 +61,13 @@ def test_size_limit_is_enforced_before_accepting_metadata(setup_api):
     meta={"id":str(uuid4()),"order":0,"mime_type":"image/png","size_bytes":s.max_image_bytes+1,"sha256":"a"*64}
     assert c.put(f"/v1/ideas/{uuid4()}/record",headers=a,json=mutation("",attachments=[meta])).status_code==413
 
+
+def test_server_readiness_is_checked_not_old_client_upload_history(setup_api):
+    c,a,_,_=setup_api
+    aid,data=register(c,a)
+    response=c.get(f"/v1/attachments/{aid}",headers=a)
+    assert response.status_code==200
+    assert response.json()["content_ready"] is False
+    c.put(f"/v1/attachments/{aid}/content",headers=a,content=data)
+    assert c.get(f"/v1/attachments/{aid}",headers=a).json()["content_ready"] is True
+

@@ -1,0 +1,11 @@
+.git
+.venv
+.tooling
+.superpowers
+node_modules
+data
+artifacts
+android
+desktop
+test-results
+playwright-report

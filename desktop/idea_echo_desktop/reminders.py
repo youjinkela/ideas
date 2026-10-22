@@ -10,6 +10,16 @@ def reminder_due(now: datetime,last_sent_day: date | None,pending_count: int) ->
     return pending_count>0 and local.hour>=19 and last_sent_day!=local.date()
 
 
+def claim_reminder(cache,now: datetime,pending_count: int) -> bool:
+    with cache.db() as con:
+        con.execute("BEGIN IMMEDIATE")
+        row=con.execute("SELECT value FROM meta WHERE key='last_reminder'").fetchone()
+        last=date.fromisoformat(row[0]) if row else None
+        if not reminder_due(now,last,pending_count):return False
+        con.execute("INSERT OR REPLACE INTO meta VALUES('last_reminder',?)",(now.astimezone(SHANGHAI).date().isoformat(),))
+        return True
+
+
 def send_reminder(review_url: str) -> bool:
     try:
         from winotify import Notification

@@ -12,3 +12,5 @@ record payload 是 `idea.schema.json`（不需要传 raw_version）；review 为
 `PUT /v1/attachments/{uuid}/content` 传已登记清单中附件的原始字节（不是multipart），重复相同内容可重试；GET 同一路径读取私有原图。只有服务端校验成功才 content_ready。
 
 `GET /v1/capabilities` 返回容量和格式限制。错误不会把未上传的记录清空。手机原始 recorded_at 只用于展示，不作为同步游标。
+
+`GET /v1/attachments/{uuid}` 返回经过账号验证的附件元数据与 `content_ready`。客户端重新引用图片时以服务器当前状态为准，不能仅依赖很久以前的本地上传记录。

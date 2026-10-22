@@ -9,7 +9,7 @@ from .settings import Settings
 from .auth import Login, login, require_owner
 from .db import connect
 from .records import Mutation, apply_mutation, read_changes
-from .attachments import store_attachment, open_attachment, metadata, thumbnail
+from .attachments import store_attachment, open_attachment, metadata, thumbnail, attachment_path
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -59,6 +59,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 staged.write(chunk)
             staged.seek(0)
             return await run_in_threadpool(store_attachment,settings,owner,str(aid),staged)
+
+    @app.get("/v1/attachments/{aid}")
+    def attachment_info(aid: UUID,owner: str=Depends(require_owner)):
+        info=metadata(settings,owner,str(aid))
+        return info["descriptor"] | {"content_ready":bool(info["ready"]) and attachment_path(settings,str(aid)).is_file()}
 
     @app.get("/v1/attachments/{aid}/content")
     def download(aid: UUID,owner: str=Depends(require_owner)):

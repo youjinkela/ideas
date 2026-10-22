@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 
 from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
@@ -16,6 +17,27 @@ from .settings import Settings
 STORAGE_LOCK = threading.RLock()  # Also used by backup/garbage collection.
 IMAGE_LOCK = threading.Lock()
 FORMATS = {"PNG":"image/png", "JPEG":"image/jpeg", "WEBP":"image/webp"}
+
+
+@contextmanager
+def storage_guard(settings: Settings):
+    """Serialize file publication/GC/backups across API and maintenance processes."""
+    settings.data_dir.mkdir(parents=True,exist_ok=True)
+    with STORAGE_LOCK,(settings.data_dir/".storage.lock").open("a+b") as lock:
+        lock.seek(0,2)
+        if lock.tell()==0:lock.write(b"0");lock.flush()
+        lock.seek(0)
+        if os.name=="nt":
+            import msvcrt
+            msvcrt.locking(lock.fileno(),msvcrt.LK_LOCK,1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(),fcntl.LOCK_EX)
+        try:yield
+        finally:
+            lock.seek(0)
+            if os.name=="nt":msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
+            else:fcntl.flock(lock.fileno(),fcntl.LOCK_UN)
 
 
 def metadata(settings: Settings, owner: str, aid: str) -> dict:
@@ -58,7 +80,7 @@ def store_attachment(settings: Settings, owner_id: str, attachment_id: str, stre
         except (UnidentifiedImageError,OSError,ValueError,Image.DecompressionBombError):
             raise HTTPException(422,"不是有效的受支持图片")
         receipt={"id":attachment_id,"sha256":meta["sha256"],"content_ready":True}
-        with STORAGE_LOCK,connect(settings) as con:
+        with storage_guard(settings),connect(settings) as con:
             con.execute("BEGIN IMMEDIATE")
             current=con.execute("SELECT ready FROM attachments WHERE id=? AND owner=?",(attachment_id,owner_id)).fetchone()
             if not current:
@@ -93,7 +115,7 @@ def thumbnail(settings: Settings, owner: str, aid: str) -> bytes:
 
 def collect_unreferenced(settings: Settings,before: float | None=None) -> int:
     cutoff=before if before is not None else time.time()-7*86400
-    with STORAGE_LOCK,connect(settings) as con:
+    with storage_guard(settings),connect(settings) as con:
         con.execute("BEGIN IMMEDIATE")
         rows=con.execute("SELECT id FROM attachments WHERE created<? AND NOT EXISTS(SELECT 1 FROM attachment_refs r WHERE r.attachment_id=attachments.id)",(cutoff,)).fetchall()
         for row in rows:
