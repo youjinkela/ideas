@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+pythonpath = ["server", "desktop"]
+testpaths = ["server/tests", "desktop/tests", "tests/e2e"]
+addopts = "-ra"
+

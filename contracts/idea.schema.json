@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IdeaRecord", "type": "object", "additionalProperties": false,
+  "required": ["id", "text", "recorded_at", "attachments", "raw_version"],
+  "properties": {
+    "id": {"type":"string", "format":"uuid"},
+    "text": {"type":"string", "maxLength":100000},
+    "recorded_at": {"type":"string", "format":"date-time"},
+    "raw_version": {"type":"integer", "minimum":0},
+    "attachments": {"type":"array", "maxItems":20, "uniqueItems":true, "items": {
+      "type":"object", "additionalProperties":false,
+      "required":["id","order","mime_type","size_bytes","sha256"],
+      "properties": {
+        "id":{"type":"string","format":"uuid"},
+        "order":{"type":"integer","minimum":0},
+        "mime_type":{"enum":["image/jpeg","image/png","image/webp"]},
+        "size_bytes":{"type":"integer","minimum":1,"maximum":20971520},
+        "sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}
+      }
+    }}
+  },
+  "anyOf":[{"properties":{"text":{"pattern":"\\S"}}},{"properties":{"attachments":{"minItems":1}}}]
+}
