@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
+from uuid import uuid4
 from .settings import Settings
 
 
@@ -13,6 +14,9 @@ def connect(settings: Settings):
     if con.execute("PRAGMA user_version").fetchone()[0] == 0:
         con.executescript((Path(__file__).parent / "migrations/001_initial.sql").read_text("utf-8"))
     try:
+        con.execute("CREATE TABLE IF NOT EXISTS sync_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        con.execute("INSERT OR IGNORE INTO sync_metadata VALUES('generation',?)",(str(uuid4()),))
+        con.commit()
         yield con
         con.commit()
     except BaseException:

@@ -7,7 +7,7 @@ import re
 from pathlib import Path,PurePosixPath
 import sqlite3
 import tempfile
-from uuid import UUID
+from uuid import UUID,uuid4
 import zipfile
 from .attachments import storage_guard
 from .settings import Settings
@@ -94,6 +94,9 @@ def restore_backup(source: Path,empty_destination: Path) -> None:
             if digest.hexdigest()!=expected:raise ValueError("恢复过程中校验失败，请保留原备份重新恢复到另一个空目录")
     with closing(sqlite3.connect(target/"ideas.db")) as con:
         if con.execute("PRAGMA integrity_check").fetchone()[0]!="ok":raise ValueError("恢复的数据库完整性检查失败")
+        con.execute("CREATE TABLE IF NOT EXISTS sync_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        con.execute("INSERT OR REPLACE INTO sync_metadata VALUES('generation',?)",(str(uuid4()),))
+        con.commit()
 
 
 def rotate_backups(directory: Path) -> list[Path]:

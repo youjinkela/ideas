@@ -79,6 +79,8 @@ class Cache:
                             image["content_ready"]=readiness.get(image["id"],False)
                     elif not pending:
                         if kind=="review":
+                            if data.get("reflection","")!=payload["reflection"] or data.get("review_version",0)!=payload["review_version"]:
+                                data["edit_revision"]=data.get("edit_revision",0)+1
                             data.update(reflection=payload["reflection"],review_version=payload["review_version"])
                         elif kind=="status":
                             data.update(status=payload["value"],status_version=payload["status_version"])
@@ -97,15 +99,29 @@ class Cache:
         request={"mutation_id":str(uuid4()),"expected_version":version,"payload":payload}
         con.execute("INSERT OR REPLACE INTO outbox VALUES(?,?,?,NULL)",(id,kind,json.dumps(request,ensure_ascii=False)))
 
-    def save_reflection(self,id,text,expected_version=0):
+    def save_reflection(self,id,text,expected_version=0,expected_edit_revision=None):
         if len(text)>200000:
             raise ValueError("发散内容过长，请分开整理")
         with self.db() as con:
+            con.execute("BEGIN IMMEDIATE")
             data=self._idea(con,id)
+            if expected_version!=data.get("review_version",0) or expected_edit_revision is not None and expected_edit_revision!=data.get("edit_revision",0):
+                raise ValueError("发散已有新版本；旧稿仍留在编辑框，请先复制保留，再重新选择点子对比合并")
             data["reflection"]=text
+            data["edit_revision"]=data.get("edit_revision",0)+1
             self._queue(con,id,"review",{"reflection":text},data.get("review_version",expected_version))
             self._store(con,id,data)
         return data
+
+    def generation(self):
+        with self.db() as con:
+            row=con.execute("SELECT value FROM meta WHERE key='generation'").fetchone()
+            return row[0] if row else None
+
+    def set_generation(self,generation,reset=False):
+        with self.db() as con:
+            con.execute("INSERT OR REPLACE INTO meta VALUES('generation',?)",(generation,))
+            if reset:con.execute("INSERT OR REPLACE INTO meta VALUES('cursor','0')")
 
     def set_status(self,id,value):
         if value not in ("pending","later","reviewed","archived"):

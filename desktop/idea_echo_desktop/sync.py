@@ -9,7 +9,20 @@ def sync_cloud(cache: Cache,cloud_url: str,token: str,client=None) -> dict:
     owns=client is None
     client=client or httpx.Client(base_url=cloud_url,timeout=30,follow_redirects=False)
     sent=0
+    def pull():
+        for _ in range(10000):
+            params={"after":cache.cursor(),"limit":100}
+            if cache.generation():params["generation"]=cache.generation()
+            response=client.get("/v1/changes",params=params,headers=headers)
+            if response.status_code==409 and response.json().get("detail",{}).get("cursor_reset"):
+                cache.set_generation(response.json()["detail"]["generation"],reset=True);continue
+            response.raise_for_status();page=response.json()
+            if page.get("generation"):cache.set_generation(page["generation"])
+            cache.apply_events(page["events"])
+            if not page["has_more"]:return
+        raise ValueError("同步页数过多，请稍后重试")
     try:
+        pull()
         for operation in cache.pending():
             body={k:operation[k] for k in ("mutation_id","expected_version","payload")}
             response=client.put(f"/v1/ideas/{operation['id']}/{operation['kind']}",headers=headers,json=body)
@@ -17,12 +30,7 @@ def sync_cloud(cache: Cache,cloud_url: str,token: str,client=None) -> dict:
                 cache.mark_conflict(operation,response.json().get("detail"));continue
             response.raise_for_status()
             cache.acknowledge(operation,response.json());sent+=1
-        while True:
-            response=client.get("/v1/changes",params={"after":cache.cursor(),"limit":100},headers=headers)
-            response.raise_for_status()
-            page=response.json()
-            cache.apply_events(page["events"])
-            if not page["has_more"]:break
+        pull()
         image_dir=cache.root/"attachments"
         image_dir.mkdir(exist_ok=True)
         waiting=0

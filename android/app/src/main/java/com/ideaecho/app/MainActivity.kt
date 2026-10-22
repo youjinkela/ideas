@@ -193,8 +193,18 @@ class MainActivity : ComponentActivity() {
             content.addView(label(item.text))
             val state=when {item.owner==null->"仅存本机，待关联账号";item.syncedRevision>=item.revision->"已同步";item.syncError.orEmpty().startsWith("conflict:")->"版本冲突，手机与云端内容都保留";else->item.syncError ?: "已存本机，待上传"}
             content.addView(label(state,12))
-            LocalAttachment.decode(item.imagesJson).forEach { image ->
-                content.addView(button("查看图片 ${image.order+1}") { showImage(image.path) })
+            val savedImages=LocalAttachment.decode(item.imagesJson).sortedBy { it.order }
+            if(savedImages.isNotEmpty()) {
+                val strip=LinearLayout(this)
+                savedImages.forEach { image ->
+                    val thumbnail=HistoryThumbnail(this).apply {
+                        contentDescription="点子图片 ${image.order+1}，点击放大"
+                        setOnClickListener { showImage(image.path) }
+                    }
+                    strip.addView(thumbnail)
+                    loadImage(thumbnail,image.path,256)
+                }
+                content.addView(HorizontalScrollView(this).apply { addView(strip) })
             }
             content.addView(button("编辑原文") {
                 val edit=field("原始点子",item.text).apply { minLines=4;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE }

@@ -102,9 +102,13 @@ def apply_mutation(settings: Settings, owner_id: str, kind: str, entity_id: str,
         return ack
 
 
-def read_changes(settings: Settings, owner_id: str, after: int, limit: int) -> dict:
+def read_changes(settings: Settings, owner_id: str, after: int, limit: int,generation=None) -> dict:
     with connect(settings) as con:
+        current_generation=con.execute("SELECT value FROM sync_metadata WHERE key='generation'").fetchone()[0]
+        maximum=con.execute("SELECT COALESCE(MAX(seq),0) FROM events WHERE owner=?",(owner_id,)).fetchone()[0]
+        if generation is not None and generation!=current_generation or after>maximum:
+            raise HTTPException(409,{"cursor_reset":True,"generation":current_generation})
         rows = con.execute("SELECT * FROM events WHERE owner=? AND seq>? ORDER BY seq LIMIT ?", (owner_id,after,limit+1)).fetchall()
     events = [{"seq":r["seq"], "kind":r["kind"], "entity_id":r["entity_id"], "payload":json.loads(r["payload"])} for r in rows[:limit]]
-    return {"events":events, "next_cursor":events[-1]["seq"] if events else after, "has_more":len(rows)>limit}
+    return {"events":events, "next_cursor":events[-1]["seq"] if events else after, "has_more":len(rows)>limit,"generation":current_generation}
 

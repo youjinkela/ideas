@@ -38,6 +38,7 @@ def test_full_graphical_capture_review_archive_and_restore(tmp_path):
     op=manager.preview(record,record["reflection"],"new",folder="灵感",title="图文点子")
     receipt=manager.commit(op["operation_id"])
     assert manager.commit(op["operation_id"])==receipt
+    manager.acknowledge(op["operation_id"])
     note=vault/receipt["path"];body=note.read_text("utf-8")
     assert "我主动补充的发散" in body
     for link in re.findall(r"!\[[^\]]*\]\(([^)]+)\)",body):

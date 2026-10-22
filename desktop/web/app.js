@@ -11,12 +11,12 @@ async function api(path,body){
 function notice(text){$('notice').textContent=text;$('notice').hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').hidden=true,5000);}
 function guarded(fn){return (...args)=>Promise.resolve().then(()=>fn(...args)).catch(e=>notice(e.message));}
 function title(idea){return idea.text.split('\n').find(s=>s.trim())?.trim().slice(0,60)||'图片点子';}
-function queueDraft(){if(!current)return;drafts.set(current.id,$('reflection').value);current.reflection=$('reflection').value;$('saveStatus').textContent='正在保存到本机…';clearTimeout(saveTimer);saveTimer=setTimeout(()=>flush().catch(e=>notice(e.message)),500);}
+function queueDraft(){if(!current)return;const old=drafts.get(current.id);drafts.set(current.id,{text:$('reflection').value,version:old?.version??current.review_version??0,revision:old?.revision??current.edit_revision??0});current.reflection=$('reflection').value;$('saveStatus').textContent='正在保存到本机…';clearTimeout(saveTimer);saveTimer=setTimeout(()=>flush().catch(e=>notice(e.message)),500);}
 function flush(){
   clearTimeout(saveTimer);
   saveTail=saveTail.catch(()=>{}).then(async()=>{
-    for(const [id,text] of [...drafts]){
-      try{await api('/local/reflection',{id,reflection:text});if(drafts.get(id)===text)drafts.delete(id);}
+    for(const [id,draft] of [...drafts]){
+      try{const saved=await api('/local/reflection',{id,reflection:draft.text,expected_version:draft.version,expected_edit_revision:draft.revision});if(drafts.get(id)===draft)drafts.delete(id);else if(drafts.has(id)){drafts.get(id).version=saved.review_version;drafts.get(id).revision=saved.edit_revision;}if(current?.id===id){current.review_version=saved.review_version;current.edit_revision=saved.edit_revision;}}
       catch(error){$('saveStatus').textContent='尚未保存成功，请保留此页面后重试';throw error;}
     }
     $('saveStatus').textContent='已保存到本机';
@@ -36,18 +36,19 @@ function renderList(){
 }
 async function load(){
   const result=await api('/local/ideas?view='+$('view').value);ideas=result.ideas;
-  for(const idea of ideas)if(drafts.has(idea.id))idea.reflection=drafts.get(idea.id);
-  if(current){const found=ideas.find(x=>x.id===current.id);if(found)current=found;else current=null;}
+  for(const idea of ideas)if(drafts.has(idea.id))idea.reflection=drafts.get(idea.id).text;
+  if(current){const found=ideas.find(x=>x.id===current.id);if(found&&!drafts.has(current.id))current=found;else if(!found)current=null;}
   $('appStatus').textContent=result.sync_error?'本机编辑可用 · 同步待重试':'已连接本机 · '+result.pending_uploads+' 项待同步';
   renderList();
   if(!current&&ideas.length)await select(ideas[0].id);
+  else if(current&&!drafts.has(current.id))await select(current.id);
   else if(!current){$('workspace').hidden=true;$('empty').hidden=false;}
 }
 async function select(id){
   await flush();current=ideas.find(x=>x.id===id);if(!current)return;
   $('workspace').hidden=false;$('empty').hidden=true;
   $('recordedAt').textContent=new Date(current.recorded_at).toLocaleString('zh-CN');$('ideaTitle').textContent=title(current);$('raw').textContent=current.text;
-  $('reflection').value=drafts.has(id)?drafts.get(id):current.reflection||'';
+  $('reflection').value=drafts.has(id)?drafts.get(id).text:current.reflection||'';
   $('saveStatus').textContent='编辑自动保存到本机';$('ideaImages').replaceChildren();
   for(const image of current.attachments||[]){
     if(image.local_ready){const img=document.createElement('img');img.src='/local/images/'+encodeURIComponent(image.id);img.alt='点子图片 '+(image.order+1);img.onclick=()=>{$('largeImage').src=img.src;$('imageDialog').showModal();};$('ideaImages').append(img);}
@@ -90,11 +91,12 @@ $('archive').onclick=guarded(async()=>{
 $('previewArchive').onclick=guarded(async()=>{
   if(!current)return;await flush();
   preview=await api('/local/archive/preview',{id:current.id,mode:$('archiveMode').value,folder:$('folder').value,title:$('noteTitle').value,target:$('targetNote').value});
+  if(preview.resumed)notice('已恢复此前未确认的归档操作；将沿用原目标和正文，避免重复写入');
   $('archivePreview').textContent=preview.content;$('archiveDestination').textContent='保存到：'+preview.path+(preview.attachments.length?' · '+preview.attachments.length+' 张本地附件':'');$('commitArchive').disabled=false;
 });
 $('commitArchive').onclick=guarded(async()=>{
   if(!preview)return;$('commitArchive').disabled=true;
-  try{const result=await api('/local/archive/commit',{operation_id:preview.operation_id});$('archiveDialog').close();notice('已保存到 '+result.path);preview=null;await load();}catch(e){$('commitArchive').disabled=false;throw e;}
+  try{const result=await api('/local/archive/commit',{operation_id:preview.operation_id});await api('/local/archive/ack',{operation_id:preview.operation_id});$('archiveDialog').close();notice('已保存到 '+result.path);preview=null;await load();}catch(e){$('commitArchive').disabled=false;throw e;}
 });
 async function ask(mode){
   if(!current){notice('先选择一个点子');return;}

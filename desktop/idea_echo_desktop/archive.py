@@ -1,4 +1,5 @@
 from datetime import datetime
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -7,7 +8,7 @@ import threading
 from urllib.parse import quote
 from uuid import uuid4, UUID
 
-from .vault import Vault,safe_name
+from .vault import Vault,safe_name,safe_open
 
 
 def checksum(data: bytes) -> str:
@@ -24,6 +25,23 @@ def atomic_write(path: Path,data: bytes):
         temp.unlink(missing_ok=True)
 
 
+def write_durable(out,data):
+    out.write(data);out.flush();os.fsync(out.fileno())
+
+
+def publish_new(path,data):
+    # Both paths are inside a pinned directory. Windows rename refuses replacement.
+    temp=path.with_name('idea-echo-stage-'+uuid4().hex+'.tmp')
+    try:
+        with temp.open('xb') as out:write_durable(out,data)
+        os.rename(temp,path)
+    finally:temp.unlink(missing_ok=True)
+
+
+def read_safe(path):
+    with safe_open(path) as source:return source.read()
+
+
 class ArchiveManager(Vault):
     def __init__(self,root: Path,operations: Path,images: Path):
         super().__init__(root)
@@ -36,6 +54,10 @@ class ArchiveManager(Vault):
         if mode not in ("new","append"):
             raise ValueError("请选择新建或追加")
         with self.lock:
+            for stored in sorted(self.operations.glob('*/operation.json'),key=lambda p:p.stat().st_mtime,reverse=True):
+                previous=json.loads(stored.read_text('utf-8'))
+                if previous.get('vault')==str(self.root) and previous.get('idea_id')==idea['id'] and previous.get('state') in ('writing','complete') and not previous.get('confirmed'):
+                    return self._preview_result(stored.parent,previous,resumed=True)
             if mode=="new":
                 directory=self.path(folder)
                 if not directory.is_dir():raise ValueError("文件夹不存在")
@@ -51,7 +73,7 @@ class ArchiveManager(Vault):
                 candidate=self.path(target)
                 if candidate.suffix.lower()!=".md" or not candidate.is_file():raise ValueError("请选择已有 Markdown 笔记")
                 relative=candidate.relative_to(self.root).as_posix()
-                original=candidate.read_bytes()
+                with self.guard(relative):original=read_safe(candidate)
                 try:original.decode("utf-8-sig")
                 except UnicodeError:raise ValueError("目标笔记不是 UTF-8，请先转换编码")
             attachments=[]
@@ -80,48 +102,55 @@ class ArchiveManager(Vault):
             atomic_write(directory/"original.bin",original)
             atomic_write(directory/"result.bin",after)
             atomic_write(directory/"operation.json",json.dumps(op,ensure_ascii=False).encode())
-            return {"operation_id":operation_id,"path":relative,"content":after.decode("utf-8-sig"),"attachments":[a["path"] for a in attachments],"mode":mode}
+            return self._preview_result(directory,op)
+
+    def _preview_result(self,directory,op,resumed=False):
+        return {"operation_id":op['operation_id'],"path":op['path'],"content":(directory/'result.bin').read_bytes().decode('utf-8-sig'),"attachments":[a['path'] for a in op['attachments']],"mode":op['mode'],"resumed":resumed}
+
+    def acknowledge(self,operation_id):
+        directory=self.operations/str(UUID(operation_id))
+        op=json.loads((directory/'operation.json').read_text('utf-8'))
+        if op['vault']!=str(self.root) or op['state']!='complete':raise ValueError('归档尚未完成')
+        op['confirmed']=True
+        atomic_write(directory/'operation.json',json.dumps(op,ensure_ascii=False).encode())
 
     def commit(self,operation_id):
         operation_id=str(UUID(operation_id))
-        with self.lock:
+        with self.lock,ExitStack() as pins:
             directory=self.operations/operation_id
             op=json.loads((directory/"operation.json").read_text("utf-8"))
             if op["vault"]!=str(self.root):raise ValueError("笔记库已改变，请重新预览")
-            target=self.path(op["path"])
+            # Pin parent identity before the final path check or any vault write.
+            target=pins.enter_context(self.guard(op['path']))
+            image_paths={image['path']:pins.enter_context(self.guard(image['path'],create_parents=True)) for image in op['attachments']}
             if op["state"]=="complete":return op["receipt"]
             expected=(directory/"result.bin").read_bytes()
-            current=target.read_bytes() if target.exists() else b""
+            current=read_safe(target) if target.exists() else b""
             if current.startswith(expected) and current:
                 return self._complete(directory,op)
             if op["mode"]=="new" and target.exists():raise ValueError("同名笔记已出现，请重新选择标题")
-            if op["mode"]=="append" and (not target.is_file() or checksum(current)!=op["original_hash"]):
+            recovering=op['state']=='writing' and current==expected[:len(current)] and len(current)>=(directory/'original.bin').stat().st_size and len(current)<=len(expected)
+            if op["mode"]=="append" and (not target.is_file() or checksum(current)!=op["original_hash"] and not recovering):
                 raise ValueError("笔记已被外部修改，原文备份和待写内容已保留，请重新预览")
             for image in op["attachments"]:
                 source=self.images/image["source"]
                 if not source.exists() or checksum(source.read_bytes())!=image["sha256"]:raise ValueError("本机缺图，未完成归档")
-                dest=self.path(image["path"])
-                dest.parent.mkdir(exist_ok=True)
+                dest=image_paths[image['path']]
                 if dest.exists():
-                    if checksum(dest.read_bytes())!=image["sha256"]:raise ValueError("附件重名但内容不同")
+                    if checksum(read_safe(dest))!=image["sha256"]:raise ValueError("附件重名但内容不同")
                 else:
-                    with dest.open("xb") as out:
-                        out.write(source.read_bytes());out.flush();os.fsync(out.fileno())
+                    publish_new(dest,source.read_bytes())
             if op["mode"]=="new":
-                with target.open("xb") as out:
-                    out.write(expected);out.flush();os.fsync(out.fileno())
+                publish_new(target,expected)
             else:
-                # Windows range lock prevents concurrent editors during validation+write.
-                with target.open("r+b") as out:
-                    if os.name=="nt":
-                        import msvcrt
-                        msvcrt.locking(out.fileno(),msvcrt.LK_NBLCK,max(len(expected),1))
-                    try:
-                        if checksum(out.read())!=op["original_hash"]:raise ValueError("笔记刚刚发生变化，请重新预览")
-                        out.seek(0);out.write(expected);out.truncate();out.flush();os.fsync(out.fileno())
-                    finally:
-                        if os.name=="nt":
-                            out.seek(0);msvcrt.locking(out.fileno(),msvcrt.LK_UNLCK,max(len(expected),1))
+                # No-share-write, no-share-delete, OPEN_REPARSE_POINT file handle.
+                with safe_open(target,write=True) as out:
+                    now=out.read();stat=os.fstat(out.fileno());identity=[stat.st_dev,stat.st_ino]
+                    if checksum(now)!=op['original_hash'] and not (recovering and now==current and op.get('file_identity')==identity):raise ValueError('笔记刚刚发生变化，请重新预览')
+                    op.update(state='writing',file_identity=identity)
+                    atomic_write(directory/'operation.json',json.dumps(op,ensure_ascii=False).encode())
+                    offset=(directory/'original.bin').stat().st_size
+                    out.seek(offset);write_durable(out,expected[offset:]);out.truncate();out.flush();os.fsync(out.fileno())
             return self._complete(directory,op)
 
     def _complete(self,directory,op):

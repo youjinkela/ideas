@@ -48,3 +48,48 @@ test('pending images are shown honestly and screenshot is reviewable', async ({ 
   await expect(page.locator('#ideaImages')).toContainText('图片待上传');
   await page.screenshot({path:'artifacts/desktop-review.png',fullPage:true});
 });
+
+test('a stale second window cannot overwrite a newer local edit', async ({page,context}) => {
+  await page.locator('#view').selectOption('all');
+  await page.getByRole('button',{name:/早晨的图文点子/}).click();
+  const other=await context.newPage();
+  await other.goto('/#e2e-bootstrap');
+  await expect(other.locator('#appStatus')).toContainText('已连接本机');
+  await other.locator('#view').selectOption('all');
+  await other.getByRole('button',{name:/早晨的图文点子/}).click();
+  await page.locator('#reflection').fill('较新窗口内容');
+  await expect(page.locator('#saveStatus')).toHaveText('已保存到本机');
+  await other.locator('#reflection').fill('旧窗口不应覆盖');
+  await expect(other.locator('#notice')).toContainText('已有新版本');
+  const result=await page.evaluate(async()=>await (await fetch('/local/ideas?view=all')).json());
+  expect(result.ideas.find(x=>x.text.startsWith('早晨')).reflection).toBe('较新窗口内容');
+  await expect(other.locator('#reflection')).toHaveValue('旧窗口不应覆盖');
+  await other.close();
+});
+
+test('lost commit response and page reload resume the original append', async ({page}) => {
+  await page.locator('#view').selectOption('all');
+  await page.getByRole('button',{name:/早晨的图文点子/}).click();
+  await page.locator('#archive').click();
+  await page.locator('#archiveMode').selectOption('append');
+  await page.locator('#targetNote').selectOption('已有笔记.md');
+  const originalResponse=page.waitForResponse(r=>r.url().endsWith('/local/archive/preview'));
+  await page.locator('#previewArchive').click();
+  const original=await (await originalResponse).json();
+  await page.route('**/local/archive/commit',async route=>{await route.fetch();await route.abort('failed');});
+  await page.locator('#commitArchive').click();
+  await expect(page.locator('#commitArchive')).toBeEnabled();
+  await page.unroute('**/local/archive/commit');
+  await page.reload();
+  await expect(page.locator('#appStatus')).toContainText('已连接本机');
+  await page.locator('#view').selectOption('all');
+  await page.getByRole('button',{name:/早晨的图文点子/}).click();
+  await page.locator('#archive').click();
+  const resumedResponse=page.waitForResponse(r=>r.url().endsWith('/local/archive/preview'));
+  await page.locator('#previewArchive').click();
+  const resumed=await (await resumedResponse).json();
+  expect(resumed.operation_id).toBe(original.operation_id);
+  expect(resumed.content).toBe(original.content);
+  await page.locator('#commitArchive').click();
+  await expect(page.locator('#notice')).toContainText('已保存到');
+});

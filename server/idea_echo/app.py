@@ -43,8 +43,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return apply_mutation(settings, owner, kind, str(idea_id), body)
 
     @app.get("/v1/changes")
-    def changes(after: int = Query(0,ge=0), limit: int = Query(100,ge=1,le=100), owner: str = Depends(require_owner)):
-        return read_changes(settings, owner, after, limit)
+    def changes(after: int = Query(0,ge=0), limit: int = Query(100,ge=1,le=100),generation: str | None=Query(None,max_length=80), owner: str = Depends(require_owner)):
+        return read_changes(settings, owner, after, limit,generation)
 
     @app.put("/v1/attachments/{aid}/content")
     async def upload(aid: UUID, request: Request, owner: str=Depends(require_owner)):

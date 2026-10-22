@@ -115,7 +115,7 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
 
     @app.post("/local/reflection")
     def reflection(body: dict):
-        return app.state.cache.save_reflection(str(UUID(body["id"])),str(body.get("reflection","")),int(body.get("expected_version",0)))
+        return app.state.cache.save_reflection(str(UUID(body["id"])),str(body.get("reflection","")),int(body.get("expected_version",0)),body.get("expected_edit_revision"))
 
     @app.post("/local/status")
     def status(body: dict):
@@ -181,8 +181,13 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
     @app.post("/local/archive/commit")
     def commit(body: dict):
         result=manager().commit(str(UUID(body["operation_id"])))
-        app.state.cache.set_status(result["idea_id"],"archived")
+        if app.state.cache.get(result["idea_id"]).get("status")!="archived":app.state.cache.set_status(result["idea_id"],"archived")
         return result
+
+    @app.post("/local/archive/ack")
+    def acknowledge_archive(body: dict):
+        manager().acknowledge(str(UUID(body["operation_id"])))
+        return {"ok":True}
 
     @app.get("/local/images/{aid}")
     def image(aid: UUID):
