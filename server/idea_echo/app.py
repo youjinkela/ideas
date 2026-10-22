@@ -1,10 +1,15 @@
 import hashlib
+import tempfile
+from pathlib import Path
 from uuid import UUID
 from fastapi import FastAPI, Request, Depends, Query, HTTPException
+from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 from .settings import Settings
 from .auth import Login, login, require_owner
 from .db import connect
 from .records import Mutation, apply_mutation, read_changes
+from .attachments import store_attachment, open_attachment, metadata, thumbnail
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -40,6 +45,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/changes")
     def changes(after: int = Query(0,ge=0), limit: int = Query(100,ge=1,le=100), owner: str = Depends(require_owner)):
         return read_changes(settings, owner, after, limit)
+
+    @app.put("/v1/attachments/{aid}/content")
+    async def upload(aid: UUID, request: Request, owner: str=Depends(require_owner)):
+        meta=metadata(settings,owner,str(aid))["descriptor"]
+        settings.data_dir.mkdir(parents=True,exist_ok=True)
+        size=0
+        with tempfile.TemporaryFile(dir=settings.data_dir) as staged:
+            async for chunk in request.stream():
+                size+=len(chunk)
+                if size>settings.max_image_bytes or size>meta["size_bytes"]:
+                    raise HTTPException(413,"图片超出容量")
+                staged.write(chunk)
+            staged.seek(0)
+            return await run_in_threadpool(store_attachment,settings,owner,str(aid),staged)
+
+    @app.get("/v1/attachments/{aid}/content")
+    def download(aid: UUID,owner: str=Depends(require_owner)):
+        path=open_attachment(settings,owner,str(aid))
+        mime=metadata(settings,owner,str(aid))["descriptor"]["mime_type"]
+        return FileResponse(path,media_type=mime,headers={"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff"})
+
+    @app.get("/v1/attachments/{aid}/thumbnail")
+    def thumb(aid: UUID,owner: str=Depends(require_owner)):
+        return Response(thumbnail(settings,owner,str(aid)),media_type="image/jpeg",headers={"Cache-Control":"private, no-store"})
 
     return app
 
