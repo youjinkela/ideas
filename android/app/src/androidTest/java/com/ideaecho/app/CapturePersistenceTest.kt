@@ -12,7 +12,7 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class CapturePersistenceTest {
-    @Test fun doubleSaveWithSameIdCreatesOneIdeaAndSurvivesReopen() = runBlocking {
+    @Test fun doubleSaveWithSameIdCreatesOneIdeaAndSurvivesReopen() = runBlocking<Unit> {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val name = "test-${UUID.randomUUID()}.db"
         val id = UUID.randomUUID().toString()

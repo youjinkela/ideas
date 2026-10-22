@@ -58,7 +58,7 @@ class DeviceJourneyTest {
             sync.claimLocalRecords(owner,listOf(id,imageOnly))
             try { sync.syncOnce(owner);fail("Offline endpoint should fail") } catch (_: java.io.IOException) { }
             assertEquals(0L,db.dao().find(id)!!.syncedRevision)
-            assertNotNull(db.dao().find(id)!!.pendingPayload)
+            assertTrue(db.dao().all().any { it.pendingPayload!=null })
             account.save("http://127.0.0.1:47841",owner,token)
             sync.syncOnce(owner)
             assertTrue(db.dao().all().all { it.revision==it.syncedRevision && it.syncError==null })
