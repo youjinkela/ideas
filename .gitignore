@@ -1,6 +1,8 @@
 .venv/
 .tooling/
 .gradle/
+.kotlin/
+pytest-cache-files-*/
 **/build/
 **/__pycache__/
 *.egg-info/
