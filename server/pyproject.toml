@@ -11,4 +11,6 @@ test = ["pytest>=8,<10"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["idea_echo*"]
+[tool.setuptools.package-data]
+idea_echo = ["migrations/*.sql"]
 
