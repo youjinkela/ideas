@@ -8,6 +8,18 @@ import pytest
 ROOT=Path(__file__).resolve().parents[2]
 
 
+def test_native_https_uses_domain_and_private_upstream():
+    path=ROOT/'deploy/native/Caddyfile'
+    assert path.is_file(), 'Native HTTPS config is missing'
+    config=path.read_text('utf-8')
+    assert config.startswith('ideas.duckegg-cc.xyz {')
+    assert 'reverse_proxy 127.0.0.1:8000' in config
+    assert 'max_size 24MB' in config
+    assert 'tls internal' not in config
+    assert 'auto_https off' not in config
+    assert 'file_server' not in config
+
+
 def test_release_archive_preserves_unix_line_endings():
     if not (ROOT/'.git').exists():pytest.skip('Source checkout packaging test only')
     archive=subprocess.run(['git','-c','core.autocrlf=true','archive','--worktree-attributes','--format=tar','HEAD','deploy/native'],cwd=ROOT,capture_output=True,check=True).stdout
