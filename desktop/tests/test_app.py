@@ -6,6 +6,23 @@ from test_cache import raw_event
 ORIGIN="http://127.0.0.1:47821"
 
 
+def test_settings_network_failure_is_safe_json_and_preserves_config(tmp_path,monkeypatch):
+    import httpx
+    app=desktop(tmp_path)
+    class FailedCloud:
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def post(self,*args,**kwargs):raise httpx.ConnectError('TLS interrupted sensitive-test-password')
+    with TestClient(app,base_url=ORIGIN,raise_server_exceptions=False) as client:
+        h=session(client)
+        monkeypatch.setattr(httpx,'Client',lambda **kwargs:FailedCloud())
+        response=client.post('/local/settings',headers=h,json={'cloud_url':'https://ideas.example.com','username':'owner','password':'sensitive-test-password'})
+        assert response.status_code==502
+        assert '无法连接云端' in response.json()['detail']
+        assert 'sensitive-test-password' not in response.text
+        assert not app.state.settings.get('cloud_url')
+
+
 def desktop(tmp_path):
     try:module=importlib.import_module("idea_echo_desktop.app")
     except ImportError:pytest.fail("Desktop review service is not implemented")

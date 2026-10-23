@@ -138,8 +138,11 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
         values={}
         if body.get("cloud_url") and body.get("username") and body.get("password"):
             url=validate_cloud_url(body["cloud_url"])
-            with httpx.Client(timeout=20,follow_redirects=False) as client:
-                response=client.post(url+"/v1/auth/login",json={"username":body["username"],"password":body["password"]})
+            try:
+                with httpx.Client(timeout=20,follow_redirects=False) as client:
+                    response=client.post(url+"/v1/auth/login",json={"username":body["username"],"password":body["password"]})
+            except httpx.HTTPError:
+                raise HTTPException(502,"无法连接云端服务器，请检查网络、Clash直连规则或HTTPS；原设置保持不变") from None
             if response.status_code!=200:raise HTTPException(401,"连接失败，请核对服务器地址与账号")
             result=response.json()
             values.update(cloud_url=url,cloud_token=result["token"],account_id=str(UUID(result["account_id"])))

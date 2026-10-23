@@ -7,6 +7,18 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator('#appStatus')).toContainText('已连接本机');
 });
 
+test('non-JSON local error is explained without leaking response text',async({page})=>{
+  await page.locator('#settingsOpen').click();
+  await page.route('**/local/settings',async route=>{
+    if(route.request().method()==='POST')await route.fulfill({status:500,contentType:'text/plain',body:'Internal Server Error private-debug-marker'});
+    else await route.continue();
+  });
+  await page.locator('#saveSettings').click();
+  await expect(page.locator('#notice')).toContainText('HTTP 500');
+  await expect(page.locator('#notice')).not.toContainText('Unexpected token');
+  await expect(page.locator('#notice')).not.toContainText('private-debug-marker');
+});
+
 test('user edits survive switching; raw scripts never execute; AI stays idle', async ({ page }) => {
   const aiRequests=[];
   page.on('request',r=>{ if(r.url().includes('/local/ai/ask')) aiRequests.push(r.url()); });

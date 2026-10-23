@@ -4,7 +4,9 @@ let csrf='',ideas=[],current=null,preview=null,aiOwner=null,lastAi='',saveTimer,
 const drafts=new Map();
 async function api(path,body){
   const response=await fetch(path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},...(body===undefined?{}:{body:JSON.stringify(body)})});
-  const data=await response.json();
+  let data;
+  try{data=await response.json();}
+  catch{throw new Error('服务返回异常响应（HTTP '+response.status+'），请稍后重试；不要关闭未保存的编辑页面');}
   if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'操作没有完成，请检查设置后重试');
   return data;
 }
