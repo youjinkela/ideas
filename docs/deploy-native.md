@@ -4,6 +4,15 @@
 
 ## 首次安装
 
+旧版部署包若在第3行报 `set: pipefail: invalid option name`，原因是Windows打包转换为CRLF；没有开始创建venv。已解压文件可就地修复，无需删除目录或重传：
+
+```bash
+sed -i 's/\r$//' /opt/idea-echo-native/app/deploy/native/install.sh /opt/idea-echo-native/app/deploy/native/idea-echo.service
+bash /opt/idea-echo-native/app/deploy/native/install.sh
+```
+
+后续发布用Git属性固定LF，并直接测试归档字节，不能只对工作区脚本做语法检查。
+
 安装前确认8000端口未被其他服务占用：`ss -ltnp 'sport = :8000'`。若有监听，停止操作，不终止未知进程。
 
 上传原生部署包到 `/root/idea-echo-native-0.1.0.tar.gz`。先执行：

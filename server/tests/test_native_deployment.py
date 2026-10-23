@@ -1,7 +1,20 @@
 from pathlib import Path
 import configparser
+import io
+import subprocess
+import tarfile
+import pytest
 
 ROOT=Path(__file__).resolve().parents[2]
+
+
+def test_release_archive_preserves_unix_line_endings():
+    if not (ROOT/'.git').exists():pytest.skip('Source checkout packaging test only')
+    archive=subprocess.run(['git','-c','core.autocrlf=true','archive','--worktree-attributes','--format=tar','HEAD','deploy/native'],cwd=ROOT,capture_output=True,check=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as package:
+        for name in ('deploy/native/install.sh','deploy/native/idea-echo.service'):
+            data=package.extractfile(name).read()
+            assert b'\r\n' not in data, f'{name}: release archive must use LF, not CRLF'
 
 
 def test_native_service_is_private_unprivileged_and_durable():
