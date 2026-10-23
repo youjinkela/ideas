@@ -31,6 +31,8 @@ npm.cmd test
 
 ## 文档
 
+中国内地 ECS 无法连接 Docker Hub 时，本项目已提供[Ubuntu 24.04 原生部署](docs/deploy-native.md)。这与 Docker 部署二选一，不要同时运行两个服务占用8000端口。
+
 - [实测和待验清单](docs/acceptance.md)
 - [电脑端设置](docs/desktop-setup.md)
 - [部署](docs/deploy.md)、[备份恢复](docs/backup-restore.md)、[维护](docs/maintenance.md)

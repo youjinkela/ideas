@@ -1,0 +1,27 @@
+[Unit]
+Description=Idea Echo private API (native Python)
+After=network.target
+
+[Service]
+Type=simple
+User=idea-echo
+Group=idea-echo
+WorkingDirectory=/opt/idea-echo-native/app
+Environment=IDEA_ECHO_DATA=/var/lib/idea-echo
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/idea-echo-native/venv/bin/python -m uvicorn idea_echo.app:create_app --factory --host 127.0.0.1 --port 8000 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+StateDirectory=idea-echo
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=768M
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target
