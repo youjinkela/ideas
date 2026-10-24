@@ -1,0 +1,21 @@
+[Unit]
+Description=Idea Echo verified native backup and restore rehearsal
+After=idea-echo.service
+
+[Service]
+Type=oneshot
+User=idea-echo
+Group=idea-echo
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/idea-echo-native/venv/bin/python /opt/idea-echo-native/maintenance/backup-job.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/idea-echo
+MemoryMax=384M
+CPUQuota=50%
+Nice=10
+TimeoutStartSec=15min

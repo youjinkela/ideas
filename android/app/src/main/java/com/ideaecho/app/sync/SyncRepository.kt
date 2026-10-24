@@ -22,6 +22,11 @@ class SyncRepository(private val context: Context,private val db: AppDatabase,pr
     }
     suspend fun syncOnce(accountId: String): Boolean = withContext(Dispatchers.IO) { mutex.withLock {
         if(account.accountId!=accountId)return@withLock true
+        val server=account.server
+        val status=SyncStatusStore(context)
+        var uploaded=false
+        status.started(server,accountId)
+        try {
         val api=IdeaApi(account.server,account.token)
         repeat(3) {
             val items=db.dao().all().filter { SyncRules.belongsTo(it.owner,accountId) && it.syncedRevision<it.revision && !it.syncError.orEmpty().startsWith("conflict:") }
@@ -56,18 +61,22 @@ class SyncRepository(private val context: Context,private val db: AppDatabase,pr
                         val sent=item.pendingRevision!!
                         db.dao().update(latest.copy(rawVersion=ack.getInt("accepted_version"),syncedRevision=if(SyncRules.canMarkSynced(latest.revision,sent,true))sent else latest.syncedRevision,pendingMutation=null,pendingPayload=null,pendingRevision=null,syncError=null))
                     }
+                    uploaded=true
                 } catch(error: Exception) {
                     if(error is kotlinx.coroutines.CancellationException)throw error
                     db.withTransaction {
                         db.dao().find(initial.id)?.let { latest ->
-                            db.dao().update(latest.copy(syncError=if(error is VersionConflict)"conflict:${error.detail}" else error.message ?: "同步未完成"))
+                            db.dao().update(latest.copy(syncError=if(error is VersionConflict)"conflict:${error.detail}" else SyncFeedback.error(error)))
                         }
                     }
                     if(error !is VersionConflict)throw error
                 }
             }
         }
+        status.finished(server,accountId,uploaded)
         true
+        } catch(error: kotlinx.coroutines.CancellationException) { throw error
+        } catch(error: Exception) { status.failed(server,accountId,error);throw error }
     } }
 
     suspend fun keepLocalAfterConflict(id: String) {

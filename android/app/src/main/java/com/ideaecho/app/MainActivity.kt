@@ -1,10 +1,14 @@
 package com.ideaecho.app
 
 import android.app.AlertDialog
+import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
@@ -14,6 +18,9 @@ import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.LiveData
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.ideaecho.app.data.*
 import com.ideaecho.app.sync.*
 import kotlinx.coroutines.*
@@ -21,6 +28,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -31,6 +41,19 @@ class MainActivity : ComponentActivity() {
     private val sync by lazy { SyncRepository(this,db,account) }
     private lateinit var content: LinearLayout
     private lateinit var status: TextView
+    private lateinit var syncDetails: TextView
+    private val syncStatus by lazy { SyncStatusStore(this) }
+    private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
+    private val syncListener=SharedPreferences.OnSharedPreferenceChangeListener { _,_ -> runOnUiThread { refreshSyncDetails() } }
+    private val networkCallback=object: ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) { runOnUiThread { refreshSyncDetails() } }
+        override fun onLost(network: Network) { runOnUiThread { refreshSyncDetails() } }
+        override fun onCapabilitiesChanged(network: Network,capabilities: NetworkCapabilities) { runOnUiThread { refreshSyncDetails() } }
+    }
+    private var observedOwner: String?=null
+    private val workSources=mutableListOf<LiveData<List<WorkInfo>>>()
+    private val workStates=mutableMapOf<String,List<WorkInfo>>()
+    private var retryButton: Button?=null
     private var input: EditText?=null
     private var imageStrip: LinearLayout?=null
     private var historyList: LinearLayout?=null
@@ -70,6 +93,7 @@ class MainActivity : ComponentActivity() {
         }
         outer.addView(label("点子回声",24))
         status=label("正在读取本机记录…",12);outer.addView(status)
+        syncDetails=label("",12);outer.addView(syncDetails)
         val scroll=ScrollView(this)
         content=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         scroll.addView(content)
@@ -79,6 +103,8 @@ class MainActivity : ComponentActivity() {
             nav.addView(button(name) { screen=value;render() },LinearLayout.LayoutParams(0,-2,1f))
         }
         outer.addView(nav);setContentView(outer)
+        syncStatus.register(syncListener)
+        connectivity.registerDefaultNetworkCallback(networkCallback)
         lifecycleScope.launch {
             val draft=withContext(Dispatchers.IO) { db.dao().draft() }
             if(draft!=null) { text=draft.text;saveId=draft.saveId;images.addAll(LocalAttachment.decode(draft.imagesJson)) }
@@ -86,8 +112,46 @@ class MainActivity : ComponentActivity() {
             db.dao().observeAll().collect { rows=it;refreshStatus();if(screen=="history")renderHistory() }
         }
     }
-    override fun onResume() { super.onResume();account.accountId?.let { SyncWorker.enqueue(this,it) } }
+    override fun onResume() { super.onResume();observeSyncWork();account.accountId?.let { SyncWorker.enqueue(this,it) } }
     override fun onPause() { persistDraft();super.onPause() }
+    override fun onDestroy() {
+        syncStatus.unregister(syncListener)
+        connectivity.unregisterNetworkCallback(networkCallback)
+        super.onDestroy()
+    }
+
+    private fun observeSyncWork() {
+        val owner=account.accountId
+        if(owner!=observedOwner) {
+            workSources.forEach { it.removeObservers(this) };workSources.clear();workStates.clear()
+            observedOwner=owner
+            if(owner!=null) {
+                val manager=WorkManager.getInstance(this)
+                listOf("idea-sync-$owner","idea-sync-manual-$owner","idea-sync-periodic-$owner").forEach { name ->
+                    val source=manager.getWorkInfosForUniqueWorkLiveData(name)
+                    workSources.add(source)
+                    source.observe(this) { workStates[name]=it;refreshSyncDetails() }
+                }
+            }
+        }
+        refreshSyncDetails()
+    }
+    private fun refreshSyncDetails() {
+        if(!::syncDetails.isInitialized)return
+        val owner=account.accountId
+        if(owner==null) {
+            syncDetails.text="未连接服务器 · 点子保存在本机";retryButton?.isEnabled=true;return
+        }
+        val snapshot=syncStatus.read(account.server,owner)
+        val online=connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true
+        val running=workStates.values.flatten().any { it.state==WorkInfo.State.RUNNING }
+        val queued=workStates.filterKeys { !it.startsWith("idea-sync-periodic-") }.values.flatten().any { !it.state.isFinished }
+        val pending=rows.count { it.owner==owner && it.revision>it.syncedRevision }
+        val dateFormat=SimpleDateFormat("MM-dd HH:mm:ss",Locale.getDefault())
+        val last=if(snapshot.lastSuccessAt>0)dateFormat.format(Date(snapshot.lastSuccessAt)) else "尚无成功上传记录"
+        syncDetails.text="当前连接：${account.server}\n"+SyncFeedback.summary(pending,online,running,queued,snapshot.error,snapshot.loginRequired)+"\n最后成功上传：$last"
+        retryButton?.isEnabled=!running
+    }
 
     private fun dp(value: Int)=(value*resources.displayMetrics.density).toInt()
     private fun label(value: String,size: Int=15)=TextView(this).apply { text=value;textSize=size.toFloat();setTextColor(Color.rgb(46,68,51));setPadding(0,dp(8),0,dp(8)) }
@@ -113,10 +177,11 @@ class MainActivity : ComponentActivity() {
             rows.isNotEmpty() -> "全部已同步 · 共 ${rows.size} 条"
             else -> "本机优先保存 · 断网也能记"
         }
+        refreshSyncDetails()
     }
     private fun render() {
         if(!ready)return
-        content.removeAllViews();input=null;imageStrip=null;historyList=null
+        content.removeAllViews();input=null;imageStrip=null;historyList=null;retryButton=null
         when(screen) { "capture"->renderCapture();"history"->renderHistory();else->renderSettings() }
     }
     private fun renderCapture() {
@@ -187,7 +252,14 @@ class MainActivity : ComponentActivity() {
     }
     private fun renderHistory() {
         content.removeAllViews();content.addView(label("已记录",22))
-        content.addView(button("立即重试同步") { account.accountId?.let { SyncWorker.enqueue(this,it);message("已安排同步") } ?: message("先到设置中连接服务器") })
+        retryButton=button("立即重试同步") {
+            account.accountId?.let {
+                retryButton?.isEnabled=false
+                SyncWorker.enqueue(this,it,manual=true)
+                message("已提交重试，执行进度显示在页面上方")
+            } ?: message("先到设置中连接服务器")
+        }
+        content.addView(retryButton);refreshSyncDetails()
         for(item in rows) {
             content.addView(label(CaptureRules.title(item.text,item.recordedAt),18))
             content.addView(label(item.text))
@@ -230,24 +302,31 @@ class MainActivity : ComponentActivity() {
         val username=field("用户名")
         val password=field("密码",password=true)
         content.addView(server);content.addView(username);content.addView(password)
+        content.addView(label("修改地址后，需点击“登录并连接”并成功，才会替换当前连接。",12))
+        val loginFeedback=label("",13)
         val login=button("登录并连接") {}
         login.setOnClickListener {
             login.isEnabled=false
+            loginFeedback.text="正在连接，请稍候…"
             lifecycleScope.launch {
                 try {
                     val result=withContext(Dispatchers.IO) { IdeaApi(server.text.toString().trim()).request("POST","/v1/auth/login",JSONObject().put("username",username.text.toString()).put("password",password.text.toString())) }
                     account.save(server.text.toString().trim(),result.getString("account_id"),result.getString("token"));password.setText("")
                     val owner=account.accountId!!
+                    syncStatus.finished(account.server,owner,false);observeSyncWork()
                     val local=withContext(Dispatchers.IO) { db.dao().all().filter { it.owner==null }.map { it.id } }
                     if(local.isNotEmpty())AlertDialog.Builder(this@MainActivity).setTitle("上传此前的本机记录？").setMessage("将 ${local.size} 条未关联记录上传到这个账号。其他账号的记录不会上传。")
                         .setNegativeButton("暂不上传",null).setPositiveButton("确认上传") { _,_->lifecycleScope.launch { sync.claimLocalRecords(owner,local);SyncWorker.enqueue(this@MainActivity,owner) } }.show()
-                    SyncWorker.enqueue(this@MainActivity,owner);message("已连接，登录密码不会保存在手机")
-                } catch(error: Exception) { message(error.message ?: "连接失败，离线记录不受影响")
+                    SyncWorker.enqueue(this@MainActivity,owner,manual=true)
+                    loginFeedback.text="已连接，登录密码不会保存在手机；上传进度见页面上方"
+                } catch(error: CancellationException) { throw error
+                } catch(error: Exception) { loginFeedback.text=SyncFeedback.error(error)+"\n此次连接未成功，当前连接设置未更改。"
                 } finally { login.isEnabled=true }
             }
         }
         content.addView(login)
-        content.addView(button("退出登录（保留本机记录）") { account.logout();message("已退出，本机记录没有删除") })
+        content.addView(loginFeedback)
+        content.addView(button("退出登录（保留本机记录）") { account.logout();observeSyncWork();message("已退出，本机记录没有删除") })
         content.addView(button("导出未同步的图文") { exporter.launch("idea-echo-pending.zip") })
         content.addView(label("后台补传受系统调度影响。若长时间没有同步，请重新打开 App 或检查华为应用启动管理；不要清除应用数据。",13))
     }

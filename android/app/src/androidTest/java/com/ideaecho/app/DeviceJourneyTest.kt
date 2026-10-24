@@ -55,14 +55,25 @@ class DeviceJourneyTest {
             assertEquals(token,AccountStore(context).token)
             assertFalse(context.getSharedPreferences("account",Context.MODE_PRIVATE).getString("token","")!!.contains(token))
             val sync=SyncRepository(context,db,account)
+            val statusType=runCatching { Class.forName("com.ideaecho.app.sync.SyncStatusStore") }.getOrNull()
+            assertNotNull("Sync attempts must expose durable status without note contents",statusType)
             sync.claimLocalRecords(owner,listOf(id,imageOnly))
             try { sync.syncOnce(owner);fail("Offline endpoint should fail") } catch (_: java.io.IOException) { }
+            val failedStatus=SyncStatusStore(context).read(account.server,owner)
+            assertTrue(failedStatus.lastAttemptAt>0)
+            assertEquals(0L,failedStatus.lastSuccessAt)
+            assertTrue(failedStatus.error.contains("本机"))
             assertEquals(0L,db.dao().find(id)!!.syncedRevision)
             assertTrue(db.dao().all().any { it.pendingPayload!=null })
             account.save("http://127.0.0.1:47841",owner,token)
             sync.syncOnce(owner)
             assertTrue(db.dao().all().all { it.revision==it.syncedRevision && it.syncError==null })
+            val successStatus=SyncStatusStore(context).read(account.server,owner)
+            assertTrue(successStatus.lastSuccessAt>0)
+            assertEquals("",successStatus.error)
+            assertEquals(0L,SyncStatusStore(context).read(account.server,"other-owner").lastSuccessAt)
             sync.syncOnce(owner)
+            assertEquals("An empty local queue is not a fresh server receipt",successStatus.lastSuccessAt,SyncStatusStore(context).read(account.server,owner).lastSuccessAt)
             val api=IdeaApi(account.server,account.token)
             val events=api.request("GET","/v1/changes?after=0").getJSONArray("events")
             assertEquals(2,(0 until events.length()).count { events.getJSONObject(it).getString("kind")=="record" })
@@ -73,6 +84,7 @@ class DeviceJourneyTest {
         } finally {
             db.close();base.deleteDatabase(databaseName)
             context.getSharedPreferences("account",Context.MODE_PRIVATE).edit().clear().commit()
+            context.getSharedPreferences("sync-status",Context.MODE_PRIVATE).edit().clear().commit()
             folder.walkBottomUp().forEach { it.delete() }
         }
     }

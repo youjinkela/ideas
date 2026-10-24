@@ -253,7 +253,8 @@ def main():
     app=create_desktop_app(args.data_dir,origin,bootstrap,background=True)
     if not args.no_browser:webbrowser.open(origin+"/#"+bootstrap)
     import uvicorn
-    uvicorn.Server(uvicorn.Config(app,access_log=False,log_level="warning")).run(sockets=[sock])
+    # pythonw has no stdout; terminal colour auto-detection would crash at login.
+    uvicorn.Server(uvicorn.Config(app,access_log=False,log_level="warning",use_colors=False)).run(sockets=[sock])
 
 
 if __name__=="__main__":main()

@@ -12,6 +12,7 @@ import java.net.URI
 import java.util.concurrent.TimeUnit
 
 class LoginRequired : Exception("登录已过期，请重新登录；本机记录仍然保留")
+class HttpStatusFailure(val code: Int) : IOException("请求未完成（$code）")
 class VersionConflict(val detail: JSONObject) : Exception("原文有两个版本，请在已记录中处理冲突")
 
 class IdeaApi(val server: String,private val token: String="") {
@@ -31,7 +32,7 @@ class IdeaApi(val server: String,private val token: String="") {
             val result=runCatching { JSONObject(text) }.getOrElse { JSONObject() }
             if(response.code==401)throw LoginRequired()
             if(response.code==409)throw VersionConflict(result.optJSONObject("detail") ?: JSONObject().put("message","版本冲突"))
-            if(!response.isSuccessful)throw IOException("请求未完成（${response.code}），请检查网络/图片容量后重试")
+            if(!response.isSuccessful)throw HttpStatusFailure(response.code)
             return result
         }
     }

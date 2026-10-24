@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Idea Echo backup at 03:00 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Asia/Shanghai
+RandomizedDelaySec=5min
+Persistent=true
+Unit=idea-echo-native-backup.service
+
+[Install]
+WantedBy=timers.target
