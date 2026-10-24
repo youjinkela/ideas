@@ -1,6 +1,8 @@
 # 点子回声（ideas）0.1.0（测试版）
 
-P40 安卓离线图文记录 → 私人云收件箱 → Windows 回顾页 → 用户选择 Obsidian 目录归档。电脑白天无需开机。AI 默认不调用，仅点击时发送当前点子的文字。
+P40 安卓离线图文记录 → 私人云收件箱 → Windows 回顾页 → 用户选择 Obsidian 目录归档。目标是在电脑白天关机时也能经云端接收点子。AI 默认不调用，仅点击时发送当前点子的文字。
+
+2026-10-24 状态：ECS 原生服务、自动备份安装及电脑异地恢复已验收；Windows 通知与自启动已启用。正式域名仍等待备案后的公网联调，华为长时后台、实际重启和正式签名按验收清单分别记录；当前不是全部生产验收完成的发布版。
 
 ## 本机启动
 
@@ -37,5 +39,6 @@ npm.cmd test
 - [电脑端设置](docs/desktop-setup.md)
 - [部署](docs/deploy.md)、[备份恢复](docs/backup-restore.md)、[维护](docs/maintenance.md)
 - [版本与签名](docs/release.md)、[服务器学习顺序](docs/learning-roadmap.md)
+- [P40 后台验收与隔离测试工具](docs/p40-verification.md)
 
 源码位于独立 Git 子项目。`.tooling`、`.venv`、`data`、密钥与构建产物不提交；若此父目录参与 Obsidian 同步，请排除整个 `projects/idea-echo`，避免同步大型 SDK 和私有缓存。

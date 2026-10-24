@@ -13,14 +13,23 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["appLabel"] = "点子回声"
         javaCompileOptions { annotationProcessorOptions { arguments["room.schemaLocation"] = "$projectDir/schemas" } }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { viewBinding = true; buildConfig = true }
+    testBuildType = providers.gradleProperty("instrumentationBuildType").getOrElse("debug")
     buildTypes {
         debug { manifestPlaceholders["allowCleartext"] = "true" }
         release { manifestPlaceholders["allowCleartext"] = "false"; isMinifyEnabled = false }
+        create("acceptance") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".acceptance"
+            versionNameSuffix = "-acceptance"
+            manifestPlaceholders["appLabel"] = "点子回声·后台验收"
+            matchingFallbacks += listOf("debug")
+        }
     }
 }
 dependencies {
