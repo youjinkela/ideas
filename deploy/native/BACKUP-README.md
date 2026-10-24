@@ -9,10 +9,11 @@
 ```bash
 bash <<'INSTALL_BACKUP'
 set -euo pipefail
+umask 077
 package=/root/idea-echo-maintenance-2026-10-24.tar.gz
 test -f "$package"
 stage=$(mktemp -d /root/idea-echo-maintenance.XXXXXXXX)
-tar --no-same-owner -xzf "$package" -C "$stage"
+tar --no-same-owner --no-same-permissions -xzf "$package" -C "$stage"
 bash "$stage/install-backup.sh"
 INSTALL_BACKUP
 ```
@@ -65,5 +66,11 @@ systemctl disable --now idea-echo-native-backup.timer
 ## 验证边界
 
 已在本地用临时数据库/图片验证真实备份、恢复和失败保护。Linux 定时器的实际安装、触发和权限限制需要以上服务器验收结果；不能把本地测试当作已经上线。
+
+2026-10-24 已由用户在 ECS 执行安装，首次备份及空目录试恢复成功，日志 `restore_checked: true`，定时器列出下次北京时间 2026-10-25 03:00:08，API 健康检查正常。实际定时触发与下载到电脑后的异地恢复演练仍待验。
+
+原始 Windows 打包文件权限为 0666，root 解压保留该权限时，systemd 校验临时目录中的配置会提示 world-writable。安装脚本已通过 `install -o root -g root -m 0644` 设置正式脚本与两个正式配置的权限；用 `stat` 核对即可，无需重装。上方解压命令增加 `umask 077` 和 `--no-same-permissions`，供后续安装使用；已交付压缩包和校验值没有改变。
+
+后续验收已确认正式三份文件均为 `644 root:root`；2026-10-24 的首次 ZIP 已下载到电脑，整包 SHA256 与服务器一致，独立恢复后数据库、业务记录数量及 2 张图片验证通过。详见 [电脑异地恢复记录](../../docs/diagnostics/2026-10-24-offsite-backup-restore.md)。日历自动触发仍以随后服务器日志为准。
 
 配置依据：[systemd 定时器](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html)、[日历与时区格式](https://www.freedesktop.org/software/systemd/man/latest/systemd.time.html)。
