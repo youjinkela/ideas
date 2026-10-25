@@ -26,3 +26,11 @@ def test_desktop_pulls_and_pushes_real_cloud_api(tmp_path):
         assert cache.pending()==[]
         events=cloud.get("/v1/changes",headers={"Authorization":"Bearer "+token}).json()["events"]
         assert any(e["kind"]=="review" and e["payload"]["reflection"]=="电脑端补充" for e in events)
+        peer=Cache(tmp_path/'second-desktop')
+        sync.sync_cloud(peer,'http://testserver',token,cloud)
+        cache.delete_idea(id)
+        sync.sync_cloud(cache,'http://testserver',token,cloud)
+        sync.sync_cloud(peer,'http://testserver',token,cloud)
+        assert cache.list_ideas('all')==peer.list_ideas('all')==[]
+        assert cache.pending()==[]
+        assert [e['kind'] for e in cloud.get('/v1/changes',headers={'Authorization':'Bearer '+token}).json()['events']]==['delete']

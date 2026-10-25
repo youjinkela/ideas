@@ -6,6 +6,8 @@
 
 ## 本机启动
 
+回顾页支持红色“留待下次 / 已回顾”和黑色“无价值”操作；“无价值”确认后删除源点子与不再共用的图片，电脑离线排队，云端和手机联网同步后删除。已导出的 Obsidian 文档、历史备份保留。此功能需要更新手机与服务器；原生 ECS 更新步骤见[同步删除更新说明](docs/deletion-upgrade.md)。
+
 在项目根目录使用 PowerShell。需要 Python 3.12、JDK 17；Android 构建另需 SDK 36/build-tools 35。
 
 ```powershell

@@ -9,6 +9,7 @@ from .settings import Settings
 from .auth import Login, login, require_owner
 from .db import connect
 from .records import Mutation, apply_mutation, read_changes
+from .deletions import delete_idea
 from .attachments import store_attachment, open_attachment, metadata, thumbnail, attachment_path
 
 
@@ -19,7 +20,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "schema_version": 1}
+        return {"status": "ok", "schema_version": 1, "sync_deletion": True}
 
     @app.post("/v1/auth/login")
     def login_route(body: Login, request: Request):
@@ -38,6 +39,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.put("/v1/ideas/{idea_id}/{kind}")
     def mutate(idea_id: UUID, kind: str, body: Mutation, owner: str = Depends(require_owner)):
+        if kind=="delete":return delete_idea(settings,owner,str(idea_id),body)
         if kind not in ("record","review","status"):
             raise HTTPException(404)
         return apply_mutation(settings, owner, kind, str(idea_id), body)

@@ -119,3 +119,47 @@ test('lost commit response and page reload resume the original append', async ({
   await page.locator('#commitArchive').click();
   await expect(page.locator('#notice')).toContainText('已保存到');
 });
+
+test('remote deletion releases stale draft without trapping navigation',async({page})=>{
+  await page.locator('#view').selectOption('all');
+  await page.getByRole('button',{name:/早晨的图文点子/}).click();
+  await page.route('**/local/reflection',async route=>route.fulfill({status:410,json:{detail:{deleted_id:'11111111-1111-4111-8111-000000000001',message:'该点子已删除'}}}));
+  await page.locator('#reflection').fill('远端删除后仍在编辑的文字');
+  await expect(page.locator('#saveStatus')).toContainText('已删除');
+  await expect(page.locator('#reflection')).toHaveValue('远端删除后仍在编辑的文字');
+  await page.unroute('**/local/reflection');
+  await page.getByRole('button',{name:/昨晚没有回顾/}).click();
+  await expect(page.locator('#ideaTitle')).toContainText('昨晚没有回顾');
+});
+
+test('discard requires confirmation; failure preserves edits and deletion survives reload',async({page})=>{
+  await page.locator('#view').selectOption('all');
+  const idea=page.getByRole('button',{name:/早晨的图文点子/});
+  await idea.click();
+  await page.locator('#reflection').fill('删除失败也要保留的补充');
+  page.once('dialog',dialog=>dialog.dismiss());
+  await page.locator('#discard').click();
+  await expect(idea).toBeVisible();
+  await expect(page.locator('#reflection')).toHaveValue('删除失败也要保留的补充');
+  await page.route('**/local/delete',route=>route.fulfill({status:500,json:{detail:'示例删除失败'}}));
+  page.once('dialog',dialog=>dialog.accept());
+  await page.locator('#discard').click();
+  await expect(page.locator('#notice')).toContainText('示例删除失败');
+  await expect(page.locator('#reflection')).toHaveValue('删除失败也要保留的补充');
+  await page.unroute('**/local/delete');
+  let releaseDelete,deleteStarted;
+  const started=new Promise(resolve=>{deleteStarted=resolve;});
+  await page.route('**/local/delete',async route=>{deleteStarted();await new Promise(resolve=>{releaseDelete=resolve;});await route.continue();});
+  page.once('dialog',dialog=>dialog.accept());
+  await page.locator('#discard').click();
+  await started;
+  await expect(page.locator('#reflection')).toBeDisabled();
+  releaseDelete();
+  await expect(idea).toHaveCount(0);
+  await expect(page.locator('#reflection')).toBeEnabled();
+  await expect(page.getByRole('button',{name:/昨晚没有回顾/})).toBeVisible();
+  await page.reload();
+  await expect(page.locator('#appStatus')).toContainText('已连接本机');
+  await page.locator('#view').selectOption('all');
+  await expect(idea).toHaveCount(0);
+});

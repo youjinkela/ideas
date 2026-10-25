@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3
 import threading
 from uuid import uuid4
+from uuid import UUID
 
 
 class Cache:
@@ -17,6 +18,7 @@ class Cache:
                 CREATE TABLE IF NOT EXISTS outbox(id TEXT,kind TEXT,request TEXT,conflict TEXT,PRIMARY KEY(id,kind));
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
                 CREATE TABLE IF NOT EXISTS archives(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS local_deletions(id TEXT PRIMARY KEY);
             """)
 
     @contextmanager
@@ -58,6 +60,13 @@ class Cache:
         with self.db() as con:
             for event in events:
                 id,kind,payload=event["entity_id"],event["kind"],event["payload"]
+                if kind=="delete":
+                    self._remove_idea(con,id,payload.get('attachment_ids',[]))
+                    con.execute("INSERT OR REPLACE INTO meta VALUES('cursor',?)",(str(event["seq"]),))
+                    continue
+                if kind!="attachment" and con.execute("SELECT 1 FROM local_deletions WHERE id=?",(id,)).fetchone():
+                    con.execute("INSERT OR REPLACE INTO meta VALUES('cursor',?)",(str(event["seq"]),))
+                    continue
                 if kind=="attachment":
                     for row in con.execute("SELECT id,data FROM ideas").fetchall():
                         data=json.loads(row["data"])
@@ -131,6 +140,29 @@ class Cache:
             self._queue(con,id,"status",{"value":value},data.get("status_version",0))
             self._store(con,id,data)
 
+    def is_deleted(self,id):
+        with self.db() as con:
+            return con.execute('SELECT 1 FROM local_deletions WHERE id=?',(id,)).fetchone() is not None
+
+    def delete_idea(self,id):
+        with self.db() as con:
+            con.execute("BEGIN IMMEDIATE")
+            if con.execute("SELECT 1 FROM local_deletions WHERE id=?",(id,)).fetchone():return
+            data=self._idea(con,id)
+            self._remove_idea(con,id)
+            self._queue(con,id,'delete',{},data.get('raw_version',0))
+
+    def _remove_idea(self,con,id,attachment_ids=()):
+        row=con.execute('SELECT data FROM ideas WHERE id=?',(id,)).fetchone()
+        aids=set(attachment_ids)
+        if row:aids.update(image['id'] for image in json.loads(row[0]).get('attachments',[]))
+        con.execute('INSERT OR IGNORE INTO local_deletions VALUES(?)',(id,))
+        con.execute('DELETE FROM outbox WHERE id=?',(id,))
+        con.execute('DELETE FROM ideas WHERE id=?',(id,))
+        used={image['id'] for row in con.execute('SELECT data FROM ideas') for image in json.loads(row[0]).get('attachments',[])}
+        for aid in aids-used:
+            (self.root/'attachments'/str(UUID(aid))).unlink(missing_ok=True)
+
     def pending(self):
         with self.db() as con:
             return [dict(json.loads(r["request"]),id=r["id"],kind=r["kind"]) for r in con.execute("SELECT * FROM outbox WHERE conflict IS NULL")]
@@ -146,6 +178,7 @@ class Cache:
             else:
                 current["expected_version"]=ack["accepted_version"]
                 con.execute("UPDATE outbox SET request=? WHERE id=? AND kind=?",(json.dumps(current),old["id"],old["kind"]))
+            if old['kind']=='delete':return
             data=self._idea(con,old["id"])
             data[{"review":"review_version","status":"status_version"}[old["kind"]]]=ack["accepted_version"]
             self._store(con,old["id"],data)

@@ -36,6 +36,7 @@ class PartialBatchStatusTest {
             server.start(InetAddress.getByName("127.0.0.1"),0)
             val address=server.url("/").toString().trimEnd('/')
             val account=AccountStore(context).apply { save(address,"fixture-owner","fixture-token") }
+            server.enqueue(MockResponse().setBody("{\"events\":[],\"next_cursor\":0,\"has_more\":false,\"generation\":\"fixture-generation\"}"))
             val source=File(folder,"source.png")
             val bitmap=Bitmap.createBitmap(8,8,Bitmap.Config.ARGB_8888)
             source.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG,100,it) }
@@ -68,10 +69,10 @@ class PartialBatchStatusTest {
             assertFalse(status.loginRequired)
             if(firstRecordSucceeds) {
                 assertEquals(1L,db.dao().find(first)!!.syncedRevision)
-                assertEquals(6,server.requestCount)
+                assertEquals(7,server.requestCount)
                 assertTrue("A completed record and image receipt must survive a later failure",status.lastSuccessAt>0)
             } else {
-                assertEquals(3,server.requestCount)
+                assertEquals(4,server.requestCount)
                 assertEquals("A record acknowledgement alone must not count before its image succeeds",0L,status.lastSuccessAt)
             }
             assertEquals(0L,SyncStatusStore(context).read(address,"another-owner").lastSuccessAt)
@@ -81,6 +82,7 @@ class PartialBatchStatusTest {
             base.deleteDatabase(databaseName)
             context.getSharedPreferences("account",Context.MODE_PRIVATE).edit().clear().commit()
             context.getSharedPreferences("sync-status",Context.MODE_PRIVATE).edit().clear().commit()
+            context.getSharedPreferences("sync-changes",Context.MODE_PRIVATE).edit().clear().commit()
             folder.walkBottomUp().forEach { it.delete() }
         }
     }

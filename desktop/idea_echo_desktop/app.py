@@ -111,11 +111,20 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
 
     @app.post("/local/reflection")
     def reflection(body: dict):
-        return app.state.cache.save_reflection(str(UUID(body["id"])),str(body.get("reflection","")),int(body.get("expected_version",0)),body.get("expected_edit_revision"))
+        id=str(UUID(body['id']))
+        try:return app.state.cache.save_reflection(id,str(body.get("reflection","")),int(body.get("expected_version",0)),body.get("expected_edit_revision"))
+        except KeyError:
+            if app.state.cache.is_deleted(id):raise HTTPException(410,{'deleted_id':id,'message':'该点子已删除'})
+            raise
 
     @app.post("/local/status")
     def status(body: dict):
         app.state.cache.set_status(str(UUID(body["id"])),body["value"])
+        return {"ok":True}
+
+    @app.post("/local/delete")
+    def delete_idea(body: dict):
+        app.state.cache.delete_idea(str(UUID(body["id"])))
         return {"ok":True}
 
     @app.post("/local/conflict")

@@ -68,6 +68,9 @@ def apply_mutation(settings: Settings, owner_id: str, kind: str, entity_id: str,
     fingerprint = hashlib.sha256(dumps([kind,entity_id,mutation.model_dump(mode="json")]).encode()).hexdigest()
     with connect(settings) as con:
         con.execute("BEGIN IMMEDIATE")
+        deleted=con.execute("SELECT owner FROM deleted_ideas WHERE id=?",(entity_id,)).fetchone()
+        if deleted:
+            raise HTTPException(410 if deleted['owner']==owner_id else 404,"点子已删除" if deleted['owner']==owner_id else "未找到记录")
         prior = con.execute("SELECT * FROM mutations WHERE owner=? AND id=?", (owner_id,str(mutation.mutation_id))).fetchone()
         if prior:
             if prior["fingerprint"] != fingerprint:
@@ -103,6 +106,8 @@ def apply_mutation(settings: Settings, owner_id: str, kind: str, entity_id: str,
 
 
 def read_changes(settings: Settings, owner_id: str, after: int, limit: int,generation=None) -> dict:
+    from .deletions import cleanup_deleted_files
+    cleanup_deleted_files(settings)
     with connect(settings) as con:
         current_generation=con.execute("SELECT value FROM sync_metadata WHERE key='generation'").fetchone()[0]
         maximum=con.execute("SELECT COALESCE(MAX(seq),0) FROM events WHERE owner=?",(owner_id,)).fetchone()[0]

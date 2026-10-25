@@ -55,6 +55,23 @@ def test_user_reflection_is_durable(tmp_path):
         assert app.state.cache.get(raw_event()["entity_id"])["reflection"]=="我来编辑"
 
 
+def test_local_delete_requires_session_and_csrf_and_removes_from_all_views(tmp_path):
+    app=desktop(tmp_path);app.state.cache.apply_events([raw_event()])
+    body={"id":raw_event()["entity_id"]}
+    with TestClient(app,base_url=ORIGIN) as client:
+        assert client.post("/local/delete",json=body).status_code==401
+        h=session(client)
+        assert client.post("/local/delete",json=body).status_code==403
+        assert client.post("/local/delete",headers=h|{"Origin":"https://evil.example"},json=body).status_code==403
+        assert len(client.get("/local/ideas?view=all").json()["ideas"])==1
+        assert client.post("/local/delete",headers=h,json=body).status_code==200
+        assert client.get("/local/ideas?view=all").json()["ideas"]==[]
+        assert client.post("/local/delete",headers=h,json=body).status_code==200
+        response=client.post('/local/reflection',headers=h,json=body|{'reflection':'删除后仍打开的旧页面'})
+        assert response.status_code==410
+        assert response.json()['detail']['deleted_id']==body['id']
+
+
 def test_settings_do_not_disclose_secrets(tmp_path):
     app=desktop(tmp_path)
     with TestClient(app,base_url=ORIGIN) as client:

@@ -7,7 +7,7 @@ async function api(path,body){
   let data;
   try{data=await response.json();}
   catch{throw new Error('服务返回异常响应（HTTP '+response.status+'），请稍后重试；不要关闭未保存的编辑页面');}
-  if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'操作没有完成，请检查设置后重试');
+  if(!response.ok){const error=new Error(typeof data.detail==='string'?data.detail:'操作没有完成，请检查设置后重试');if(response.status===410)error.deletedId=data.detail?.deleted_id;throw error;}
   return data;
 }
 function notice(text){$('notice').textContent=text;$('notice').hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').hidden=true,5000);}
@@ -19,9 +19,16 @@ function flush(){
   saveTail=saveTail.catch(()=>{}).then(async()=>{
     for(const [id,draft] of [...drafts]){
       try{const saved=await api('/local/reflection',{id,reflection:draft.text,expected_version:draft.version,expected_edit_revision:draft.revision});if(drafts.get(id)===draft)drafts.delete(id);else if(drafts.has(id)){drafts.get(id).version=saved.review_version;drafts.get(id).revision=saved.edit_revision;}if(current?.id===id){current.review_version=saved.review_version;current.edit_revision=saved.edit_revision;}}
-      catch(error){$('saveStatus').textContent='尚未保存成功，请保留此页面后重试';throw error;}
+      catch(error){
+        if(error.deletedId===id){
+          drafts.delete(id);
+          if(current?.id===id){current=null;$('saveStatus').textContent='该点子已删除；未保存文字仅留在此页面，请先复制再切换';notice('点子已在其他设备删除，当前未保存文字可先复制保留');}
+          continue;
+        }
+        $('saveStatus').textContent='尚未保存成功，请保留此页面后重试';throw error;
+      }
     }
-    $('saveStatus').textContent='已保存到本机';
+    if(current)$('saveStatus').textContent='已保存到本机';
   });
   return saveTail;
 }
@@ -74,6 +81,12 @@ $('view').onchange=guarded(async()=>{await flush();current=null;await load();});
 $('sync').onclick=guarded(async()=>{await flush();$('sync').disabled=true;try{const result=await api('/local/sync',{});notice(result.setup_required?'先在设置里连接服务器':result.error||'同步完成');await load();}finally{$('sync').disabled=false;}});
 async function setStatus(value){if(!current)return;await flush();await api('/local/status',{id:current.id,value});await load();}
 $('later').onclick=guarded(()=>setStatus('later'));$('reviewed').onclick=guarded(()=>setStatus('reviewed'));
+$('discard').onclick=guarded(async()=>{
+  if(!current||!confirm('删除这条点子及其图片？电脑立即删除，云端和手机在联网同步后删除；已导出的 Obsidian 笔记保留。'))return;
+  const id=current.id;const button=$('discard');button.disabled=true;$('reflection').disabled=true;
+  try{await flush();await api('/local/delete',{id});drafts.delete(id);current=null;await load();notice('已删除，其他设备将在联网同步后删除');}
+  finally{button.disabled=false;$('reflection').disabled=false;}
+});
 async function settings(){const s=await api('/local/settings');$('cloudUrl').value=s.cloud_url||'';$('vaultPath').textContent=s.vault||'尚未选择';$('settingsDialog').showModal();}
 $('settingsOpen').onclick=$('emptySettings').onclick=guarded(settings);
 $('chooseVault').onclick=guarded(async()=>{const s=await api('/local/vault/select',{});$('vaultPath').textContent=s.vault||'尚未选择';});

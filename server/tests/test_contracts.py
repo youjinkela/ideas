@@ -16,7 +16,7 @@ def test_health_is_private_data_free(tmp_path):
     except ImportError:
         pytest.fail("Health application has not been implemented")
     with TestClient(app.create_app(settings.Settings(data_dir=tmp_path))) as client:
-        assert client.get("/health").json() == {"status": "ok", "schema_version": 1}
+        assert client.get("/health").json() == {"status": "ok", "schema_version": 1, "sync_deletion": True}
 
 
 def test_contract_fixtures():

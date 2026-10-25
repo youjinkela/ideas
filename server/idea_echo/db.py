@@ -15,6 +15,8 @@ def connect(settings: Settings):
         con.executescript((Path(__file__).parent / "migrations/001_initial.sql").read_text("utf-8"))
     try:
         con.execute("CREATE TABLE IF NOT EXISTS sync_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        con.execute("CREATE TABLE IF NOT EXISTS deleted_ideas(id TEXT PRIMARY KEY,owner TEXT NOT NULL,payload TEXT NOT NULL)")
+        con.execute("CREATE TABLE IF NOT EXISTS deletion_file_cleanup(id TEXT PRIMARY KEY)")
         con.execute("INSERT OR IGNORE INTO sync_metadata VALUES('generation',?)",(str(uuid4()),))
         con.commit()
         yield con
