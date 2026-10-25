@@ -5,6 +5,13 @@ import sqlite3
 import threading
 from uuid import uuid4
 from uuid import UUID
+import hashlib
+from datetime import datetime,timezone
+from idea_echo.records import RecordPayload
+from .capture_images import clear_staged,prune_staged,publish_images,MAX_IMAGES,MAX_RECORD_BYTES,CaptureDeleted
+
+
+class CaptureAlreadySaved(ValueError):pass
 
 
 class Cache:
@@ -19,7 +26,9 @@ class Cache:
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
                 CREATE TABLE IF NOT EXISTS archives(id TEXT PRIMARY KEY,data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS local_deletions(id TEXT PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS local_creations(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,server_attempted INTEGER NOT NULL DEFAULT 0,attachment_ids TEXT NOT NULL);
             """)
+        prune_staged(self.root)
 
     @contextmanager
     def db(self):
@@ -56,6 +65,44 @@ class Cache:
         with self.db() as con:
             return self._idea(con,id)
 
+    def create_idea(self,id,text,attachments):
+        id=str(UUID(id))
+        try:
+            payload=RecordPayload.model_validate({'text':text,'attachments':attachments,'recorded_at':datetime.now(timezone.utc)}).model_dump(mode='json')
+        except ValueError:raise ValueError('请填写文字或添加有效图片，文字最多100000字') from None
+        payload['text']=payload['text'].strip()
+        if len(payload['attachments'])>MAX_IMAGES or sum(a['size_bytes'] for a in payload['attachments'])>MAX_RECORD_BYTES:
+            raise ValueError('每条最多20张图片，合计不超过200MiB')
+        fingerprint=hashlib.sha256(json.dumps({'text':payload['text'],'attachments':payload['attachments']},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        created=[]
+        with self.lock:
+            try:
+                with self.db() as con:
+                    con.execute('BEGIN IMMEDIATE')
+                    if con.execute('SELECT 1 FROM local_deletions WHERE id=?',(id,)).fetchone():raise CaptureDeleted('这条点子已删除；当前内容可另存为新点子')
+                    prior=con.execute('SELECT fingerprint FROM local_creations WHERE id=?',(id,)).fetchone()
+                    if prior:
+                        if prior[0]!=fingerprint:raise CaptureAlreadySaved('这条点子已保存；当前修改请另存为新点子')
+                        data=self._idea(con,id)
+                    else:
+                        if con.execute('SELECT 1 FROM ideas WHERE id=?',(id,)).fetchone():raise ValueError('点子编号已存在，请重新打开添加窗口')
+                        created=publish_images(self.root,id,payload['attachments'])
+                        data=dict(payload,id=id,reflection='',status='pending',raw_version=0,review_version=0,status_version=0)
+                        data['attachments']=[dict(a,content_ready=False) for a in payload['attachments']]
+                        self._store(con,id,data)
+                        con.execute('INSERT INTO local_creations VALUES(?,?,0,?)',(id,fingerprint,json.dumps([a['id'] for a in payload['attachments']])))
+                        self._queue(con,id,'record',payload,0)
+            except BaseException:
+                if created:
+                    with self.db() as con:
+                        con.execute('BEGIN IMMEDIATE')
+                        used={a['id'] for row in con.execute('SELECT data FROM ideas') for a in json.loads(row[0]).get('attachments',[])}
+                        for aid in set(created)-used:(self.root/'attachments'/str(UUID(aid))).unlink(missing_ok=True)
+                raise
+            try:clear_staged(self.root,id)
+            except OSError:pass
+        return data
+
     def apply_events(self,events):
         with self.db() as con:
             for event in events:
@@ -65,6 +112,8 @@ class Cache:
                     con.execute("INSERT OR REPLACE INTO meta VALUES('cursor',?)",(str(event["seq"]),))
                     continue
                 if kind!="attachment" and con.execute("SELECT 1 FROM local_deletions WHERE id=?",(id,)).fetchone():
+                    if kind=='record' and not con.execute("SELECT 1 FROM outbox WHERE id=? AND kind='delete'",(id,)).fetchone():
+                        self._queue(con,id,'delete',{},payload.get('raw_version',0))
                     con.execute("INSERT OR REPLACE INTO meta VALUES('cursor',?)",(str(event["seq"]),))
                     continue
                 if kind=="attachment":
@@ -80,7 +129,7 @@ class Cache:
                     except KeyError:
                         data={"id":id,"reflection":"","status":"pending","review_version":0,"status_version":0}
                     pending=con.execute("SELECT 1 FROM outbox WHERE id=? AND kind=?",(id,kind)).fetchone()
-                    if kind=="record":
+                    if kind=="record" and not pending:
                         readiness={a["id"]:a.get("content_ready",False) for a in data.get("attachments",[])}
                         data.update(payload)
                         for image in data.get("attachments",[]):
@@ -149,23 +198,41 @@ class Cache:
             con.execute("BEGIN IMMEDIATE")
             if con.execute("SELECT 1 FROM local_deletions WHERE id=?",(id,)).fetchone():return
             data=self._idea(con,id)
+            creation=con.execute('SELECT server_attempted FROM local_creations WHERE id=?',(id,)).fetchone()
+            remote=creation is None or creation[0] or data.get('raw_version',0)>0
             self._remove_idea(con,id)
-            self._queue(con,id,'delete',{},data.get('raw_version',0))
+            if remote:self._queue(con,id,'delete',{},data.get('raw_version',0))
 
     def _remove_idea(self,con,id,attachment_ids=()):
         row=con.execute('SELECT data FROM ideas WHERE id=?',(id,)).fetchone()
         aids=set(attachment_ids)
+        creation=con.execute('SELECT attachment_ids FROM local_creations WHERE id=?',(id,)).fetchone()
+        if creation:aids.update(json.loads(creation[0]))
         if row:aids.update(image['id'] for image in json.loads(row[0]).get('attachments',[]))
         con.execute('INSERT OR IGNORE INTO local_deletions VALUES(?)',(id,))
         con.execute('DELETE FROM outbox WHERE id=?',(id,))
         con.execute('DELETE FROM ideas WHERE id=?',(id,))
+        con.execute('DELETE FROM local_creations WHERE id=?',(id,))
         used={image['id'] for row in con.execute('SELECT data FROM ideas') for image in json.loads(row[0]).get('attachments',[])}
         for aid in aids-used:
             (self.root/'attachments'/str(UUID(aid))).unlink(missing_ok=True)
+        try:clear_staged(self.root,id)
+        except OSError:pass
+
+    def operation_current(self,operation,begin=False):
+        with self.db() as con:
+            if begin:con.execute('BEGIN IMMEDIATE')
+            row=con.execute('SELECT request FROM outbox WHERE id=? AND kind=?',(operation['id'],operation['kind'])).fetchone()
+            current=row is not None and json.loads(row[0])['mutation_id']==operation['mutation_id']
+            if current and begin and operation['kind']=='record':con.execute('UPDATE local_creations SET server_attempted=1 WHERE id=?',(operation['id'],))
+            return current
+
+    def remote_delete(self,id):
+        with self.db() as con:self._remove_idea(con,id)
 
     def pending(self):
         with self.db() as con:
-            return [dict(json.loads(r["request"]),id=r["id"],kind=r["kind"]) for r in con.execute("SELECT * FROM outbox WHERE conflict IS NULL")]
+            return [dict(json.loads(r["request"]),id=r["id"],kind=r["kind"]) for r in con.execute("SELECT * FROM outbox WHERE conflict IS NULL ORDER BY CASE kind WHEN 'record' THEN 0 WHEN 'review' THEN 1 WHEN 'status' THEN 2 ELSE 3 END,rowid")]
 
     def acknowledge(self,old,ack):
         with self.db() as con:
@@ -180,7 +247,7 @@ class Cache:
                 con.execute("UPDATE outbox SET request=? WHERE id=? AND kind=?",(json.dumps(current),old["id"],old["kind"]))
             if old['kind']=='delete':return
             data=self._idea(con,old["id"])
-            data[{"review":"review_version","status":"status_version"}[old["kind"]]]=ack["accepted_version"]
+            data[{"record":"raw_version","review":"review_version","status":"status_version"}[old["kind"]]]=ack["accepted_version"]
             self._store(con,old["id"],data)
 
     def mark_conflict(self,operation,detail):
@@ -203,7 +270,8 @@ class Cache:
                 con.execute("UPDATE outbox SET request=?,conflict=NULL WHERE id=? AND kind=?",(json.dumps(request),id,kind))
             else:
                 current=detail.get("current") or {}
-                data[field]=current.get("reflection" if kind=="review" else "value", "" if kind=="review" else "pending")
+                if kind=='record':data.update({key:current[key] for key in ('text','recorded_at','attachments') if key in current})
+                else:data[field]=current.get("reflection" if kind=="review" else "value", "" if kind=="review" else "pending")
                 con.execute("DELETE FROM outbox WHERE id=? AND kind=?",(id,kind))
-            data["review_version" if kind=="review" else "status_version"]=detail["version"]
+            data[{'record':'raw_version','review':'review_version','status':'status_version'}[kind]]=detail["version"]
             self._store(con,id,data)

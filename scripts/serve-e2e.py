@@ -7,11 +7,13 @@ import hashlib
 from PIL import Image
 import uvicorn
 from idea_echo_desktop.app import create_desktop_app
+from idea_echo_desktop.settings import DesktopSettings
 
 with tempfile.TemporaryDirectory(prefix="idea-echo-browser-") as directory:
     root=Path(directory)
     vault=root/"test-vault";vault.mkdir();(vault/"学习").mkdir()
     (vault/"已有笔记.md").write_text("# 已有笔记\n用户原文\n",encoding="utf-8")
+    DesktopSettings(root/'desktop').update(account_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
     app=create_desktop_app(root/"desktop","http://127.0.0.1:47831","e2e-bootstrap")
     app.state.settings.update(vault=str(vault))
     aid="33333333-3333-4333-8333-333333333333"

@@ -16,10 +16,11 @@ from fastapi import FastAPI,Request,HTTPException
 from fastapi.responses import FileResponse,JSONResponse,Response
 from fastapi.staticfiles import StaticFiles
 from .archive import ArchiveManager
-from .cache import Cache
+from .cache import Cache,CaptureAlreadySaved
 from .reminders import claim_reminder,send_reminder,SHANGHAI
 from .settings import DesktopSettings,validate_cloud_url
 from .sync import sync_cloud
+from .capture_images import stage_image,ImageLimitError,CaptureDeleted,MAX_IMAGE_BYTES,MAX_RECORD_BYTES,MAX_IMAGES
 
 
 def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None,background=False):
@@ -27,22 +28,25 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
     sid=secrets.token_urlsafe(32);csrf=secrets.token_urlsafe(32)
     bootstrap=bootstrap or secrets.token_urlsafe(32)
     sync_lock=threading.Lock()
+    profile_lock=threading.RLock()
 
     def cache_for_account():
         account=settings.get("account_id")
         return Cache(root/"accounts"/(str(UUID(account)) if account else "local"))
 
     def perform_sync():
-        if not settings.get("cloud_url") or not settings.get("cloud_token"):
-            return {"setup_required":True}
         with sync_lock:
+            with profile_lock:
+                if not settings.get("cloud_url") or not settings.get("cloud_token"):return {"setup_required":True}
+                cache=app.state.cache;url=settings.get('cloud_url');token=settings.secret('cloud_token')
             try:
-                result=sync_cloud(app.state.cache,settings.get("cloud_url"),settings.secret("cloud_token"))
-                app.state.sync_error=""
+                result=sync_cloud(cache,url,token)
+                if app.state.cache is cache:app.state.sync_error=""
                 return result
             except (httpx.HTTPError,ValueError,OSError):
-                app.state.sync_error="同步未完成，请检查网络或重新登录；本机编辑已保留"
-                return {"error":app.state.sync_error}
+                message='同步未完成，请检查网络或重新登录；本机编辑已保留'
+                if app.state.cache is cache:app.state.sync_error=message
+                return {"error":message}
 
     async def tick():
         while True:
@@ -109,6 +113,39 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
                 image["local_ready"]=(app.state.cache.root/"attachments"/str(UUID(image["id"]))).is_file()
         return {"ideas":rows,"pending_uploads":len(app.state.cache.pending()),"sync_error":app.state.sync_error}
 
+    def capture_cache(scope):
+        with profile_lock:
+            account=settings.get('account_id');cache=app.state.cache
+            if not account:raise HTTPException(409,'首次使用请先在设置中登录账号，之后断网也能记录')
+            if cache.root.name!=account or scope!=cache.root.name:raise HTTPException(409,'连接账号已变化，内容仍保留，请重新打开添加窗口')
+            return cache
+
+    @app.get('/local/capture/config')
+    def capture_config():
+        with profile_lock:
+            return {'ready':bool(settings.get('account_id')),'scope':app.state.cache.root.name,'max_images':MAX_IMAGES,'max_image_bytes':MAX_IMAGE_BYTES,'max_total_bytes':MAX_RECORD_BYTES}
+
+    @app.put('/local/capture/{idea_id}/images/{image_id}')
+    async def capture_image(idea_id: UUID,image_id: UUID,request: Request):
+        cache=capture_cache(request.headers.get('x-capture-scope'))
+        try:return await stage_image(cache.root,str(idea_id),str(image_id),request.stream(),lock=cache.lock,deleted=lambda:cache.is_deleted(str(idea_id)))
+        except CaptureDeleted as error:raise HTTPException(410,{'message':str(error),'deleted_id':str(idea_id)}) from None
+        except ImageLimitError as error:raise HTTPException(413,str(error)) from None
+
+    @app.post('/local/ideas')
+    def create_idea(body: dict):
+        cache=capture_cache(body.get('scope'))
+        try:data=cache.create_idea(str(UUID(body['id'])),body.get('text',''),body.get('attachments',[]))
+        except CaptureDeleted as error:raise HTTPException(410,{'message':str(error),'deleted_id':str(body['id'])}) from None
+        except CaptureAlreadySaved as error:raise HTTPException(409,{'message':str(error),'capture_exists':True}) from None
+        except ImageLimitError as error:raise HTTPException(413,str(error)) from None
+        return {'idea':data,'scope':cache.root.name}
+
+    @app.get('/local/capture/{idea_id}/receipt')
+    def capture_receipt(idea_id: UUID,request: Request):
+        cache=capture_cache(request.headers.get('x-capture-scope'))
+        return {'idea':cache.get(str(idea_id)),'scope':cache.root.name}
+
     @app.post("/local/reflection")
     def reflection(body: dict):
         id=str(UUID(body['id']))
@@ -153,8 +190,10 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
             if response.status_code!=200:raise HTTPException(401,"连接失败，请核对服务器地址与账号")
             result=response.json()
             values.update(cloud_url=url,cloud_token=result["token"],account_id=str(UUID(result["account_id"])))
-        settings.update(**values)
-        if "account_id" in values:app.state.cache=cache_for_account()
+        with profile_lock:
+            settings.update(**values)
+            if "account_id" in values:
+                app.state.cache=cache_for_account();app.state.sync_error=''
         return settings.public()
 
     @app.post("/local/vault/select")

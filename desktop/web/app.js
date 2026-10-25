@@ -2,12 +2,16 @@
 const $=id=>document.getElementById(id);
 let csrf='',ideas=[],current=null,preview=null,saveTimer,noticeTimer,saveTail=Promise.resolve();
 const drafts=new Map();
+let captureId=null,captureScope=null,captureBusy=false,capturePhotos=[],captureLimits={max_images:20,max_image_bytes:20*1024*1024,max_total_bytes:200*1024*1024};
 async function api(path,body){
   const response=await fetch(path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},...(body===undefined?{}:{body:JSON.stringify(body)})});
+  return responseData(response);
+}
+async function responseData(response){
   let data;
   try{data=await response.json();}
-  catch{throw new Error('服务返回异常响应（HTTP '+response.status+'），请稍后重试；不要关闭未保存的编辑页面');}
-  if(!response.ok){const error=new Error(typeof data.detail==='string'?data.detail:'操作没有完成，请检查设置后重试');if(response.status===410)error.deletedId=data.detail?.deleted_id;throw error;}
+  catch{const error=new Error('服务返回异常响应（HTTP '+response.status+'），请稍后重试；不要关闭未保存的编辑页面');error.httpStatus=response.status;throw error;}
+  if(!response.ok){const error=new Error(typeof data.detail==='string'?data.detail:data.detail?.message||'操作没有完成，请检查设置后重试');error.httpStatus=response.status;error.captureExists=data.detail?.capture_exists;if(response.status===410)error.deletedId=data.detail?.deleted_id;throw error;}
   return data;
 }
 function notice(text){$('notice').textContent=text;$('notice').hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('notice').hidden=true,5000);}
@@ -32,7 +36,7 @@ function flush(){
   });
   return saveTail;
 }
-window.addEventListener('beforeunload',e=>{if(drafts.size){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{if(drafts.size||captureDirty()){e.preventDefault();e.returnValue='';}});
 function renderList(){
   $('count').textContent=ideas.filter(x=>['pending','later'].includes(x.status||'pending')).length+' 个待回顾';
   $('ideaList').replaceChildren(...ideas.map(idea=>{
@@ -95,6 +99,83 @@ $('saveSettings').onclick=guarded(async()=>{
   try{await flush();await api('/local/settings',{cloud_url:$('cloudUrl').value.trim(),username:$('cloudUser').value.trim(),password:$('cloudPassword').value});$('cloudPassword').value='';$('settingsDialog').close();current=null;await load();notice('连接设置已保存');}finally{button.disabled=false;}
 });
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).close());
+function captureDirty(){return !!$('captureText').value.trim()||capturePhotos.length>0;}
+function captureMatches(idea,text,attachments){
+  const manifest=images=>images.map(image=>({id:image.id,order:image.order,mime_type:image.mime_type,size_bytes:image.size_bytes,sha256:image.sha256})).sort((a,b)=>a.order-b.order);
+  return idea.text===text.trim()&&JSON.stringify(manifest(idea.attachments||[]))===JSON.stringify(manifest(attachments));
+}
+function renderCapturePhotos(){
+  $('captureImages').replaceChildren(...capturePhotos.map((photo,index)=>{
+    const item=document.createElement('div');item.className='capture-photo';
+    const image=document.createElement('img');image.src=photo.url;image.alt='点子配图 '+(index+1);
+    const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.setAttribute('aria-label','移除图片 '+(index+1));
+    remove.onclick=()=>{if(captureBusy)return;URL.revokeObjectURL(photo.url);capturePhotos=capturePhotos.filter(p=>p!==photo);renderCapturePhotos();};
+    item.append(image,remove);return item;
+  }));
+}
+function resetCapture(){capturePhotos.forEach(photo=>URL.revokeObjectURL(photo.url));capturePhotos=[];captureId=null;captureScope=null;$('captureText').value='';$('captureFiles').value='';$('captureNewCopy').hidden=true;renderCapturePhotos();}
+$('addIdea').onclick=guarded(async()=>{
+  await flush();const config=await api('/local/capture/config');
+  if(!config.ready){notice('首次使用请先登录账号，之后断网也能记录');await settings();return;}
+  if(captureScope&&captureScope!==config.scope&&captureDirty()){
+    if(!confirm('连接账号已变化，是否将当前草稿添加到现在的账号？'))return;
+    captureId=null;capturePhotos.forEach(photo=>photo.id=crypto.randomUUID());
+  }
+  captureScope=config.scope;captureLimits=config;captureId=captureId||crypto.randomUUID();
+  $('captureFeedback').textContent='先保存到电脑，联网后上传云端。';$('captureDialog').showModal();$('captureText').focus();
+});
+$('captureAddImage').onclick=()=>$('captureFiles').click();
+$('captureFiles').onchange=()=>{
+  for(const file of $('captureFiles').files){
+    if(capturePhotos.length>=captureLimits.max_images){notice('每条最多20张图片');break;}
+    if(file.type&&!['image/jpeg','image/png','image/webp'].includes(file.type)){notice('仅支持JPEG、PNG和WebP图片');continue;}
+    if(file.size>captureLimits.max_image_bytes){notice('单张图片不能超过20MiB');continue;}
+    if(capturePhotos.reduce((sum,p)=>sum+p.file.size,0)+file.size>captureLimits.max_total_bytes){notice('图片合计不能超过200MiB');continue;}
+    capturePhotos.push({id:crypto.randomUUID(),file,url:URL.createObjectURL(file)});
+  }
+  $('captureFiles').value='';renderCapturePhotos();
+};
+$('captureDialog').addEventListener('cancel',event=>{if(captureBusy)event.preventDefault();});
+document.querySelectorAll('[data-close="captureDialog"]').forEach(button=>button.onclick=()=>{if(!captureBusy)$('captureDialog').close();});
+$('captureNewCopy').onclick=()=>{captureId=crypto.randomUUID();$('captureNewCopy').hidden=true;$('captureFeedback').textContent='将按一条新点子保存，之前的记录会保留。';};
+$('saveCapture').onclick=guarded(async()=>{
+  if(captureBusy)return;
+  const text=$('captureText').value;
+  if(!text.trim()&&!capturePhotos.length){$('captureFeedback').textContent='请写一点内容或添加图片。';$('captureText').focus();return;}
+  captureBusy=true;$('captureFields').disabled=true;$('saveCapture').disabled=true;$('captureNewCopy').disabled=true;
+  document.querySelectorAll('[data-close="captureDialog"]').forEach(button=>button.disabled=true);
+  let saved;
+  try{
+    const attachments=[];
+    for(const [index,photo] of capturePhotos.entries()){
+      $('captureFeedback').textContent='正在保存图片 '+(index+1)+' / '+capturePhotos.length+'…';
+      const response=await fetch('/local/capture/'+captureId+'/images/'+photo.id,{method:'PUT',headers:{'X-CSRF-Token':csrf,'X-Capture-Scope':captureScope},body:photo.file});
+      attachments.push({...await responseData(response),order:index});
+    }
+    $('captureFeedback').textContent='正在保存点子…';
+    try{saved=await api('/local/ideas',{id:captureId,scope:captureScope,text,attachments});}
+    catch(error){
+      if(error.httpStatus===undefined||error.httpStatus>=500||error.httpStatus===200){
+        try{
+          const receipt=await responseData(await fetch('/local/capture/'+captureId+'/receipt',{headers:{'X-Capture-Scope':captureScope}}));
+          if(captureMatches(receipt.idea,text,attachments))saved=receipt;
+          else{error.captureExists=true;error.httpStatus=409;error.message='之前的内容已保存，当前修改仍保留，请另存为新点子。';}
+        }catch{}
+      }
+      if(!saved)throw error;
+    }
+  }catch(error){
+    $('captureFeedback').textContent=(error.httpStatus?error.message:'保存结果尚未确认，内容仍保留，请重试。');
+    if(error.captureExists||error.httpStatus===410)$('captureNewCopy').hidden=false;
+    return;
+  }finally{
+    captureBusy=false;$('captureFields').disabled=false;$('saveCapture').disabled=false;$('captureNewCopy').disabled=false;
+    document.querySelectorAll('[data-close="captureDialog"]').forEach(button=>button.disabled=false);
+  }
+  const id=saved.idea.id;$('captureDialog').close();resetCapture();$('view').value=['pending','later'].includes(saved.idea.status||'pending')?'pending':'all';current=null;
+  try{await load();await select(id);notice('已保存到电脑，联网后会同步到云端');}
+  catch{notice('点子已保存，列表暂未刷新，请刷新页面查看');}
+});
 $('imageDialog').addEventListener('click',event=>{
   if(event.target===event.currentTarget)event.currentTarget.close();
 });
