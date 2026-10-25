@@ -82,6 +82,9 @@ $('saveSettings').onclick=guarded(async()=>{
   try{await flush();await api('/local/settings',{cloud_url:$('cloudUrl').value.trim(),username:$('cloudUser').value.trim(),password:$('cloudPassword').value});$('cloudPassword').value='';$('settingsDialog').close();current=null;await load();notice('连接设置已保存');}finally{button.disabled=false;}
 });
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).close());
+$('imageDialog').addEventListener('click',event=>{
+  if(event.target===event.currentTarget)event.currentTarget.close();
+});
 function invalidatePreview(){preview=null;$('commitArchive').disabled=true;$('archivePreview').textContent='';$('archiveDestination').textContent='';}
 async function searchNotes(){const result=await api('/local/vault/notes?q='+encodeURIComponent($('noteSearch').value));$('targetNote').replaceChildren(...result.notes.map(path=>new Option(path,path)));invalidatePreview();}
 let searchTimer;
