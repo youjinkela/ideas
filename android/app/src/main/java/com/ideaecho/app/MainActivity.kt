@@ -14,6 +14,10 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.text.InputType
 import android.view.View
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.viewpager2.widget.ViewPager2
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,7 +43,16 @@ class MainActivity : ComponentActivity() {
     private val repository by lazy { CaptureRepository(db) }
     private val account by lazy { AccountStore(this) }
     private val sync by lazy { SyncRepository(this,db,account) }
-    private lateinit var content: LinearLayout
+    private lateinit var captureContent: LinearLayout
+    private lateinit var historyContent: LinearLayout
+    private lateinit var settingsContent: LinearLayout
+    private lateinit var pager: ViewPager2
+    private lateinit var pageTitle: TextView
+    private lateinit var captureActions: LinearLayout
+    private lateinit var saveButton: Button
+    private lateinit var pictureButton: Button
+    private var captureIntro: View?=null
+    private val pages=listOf("随手记" to "capture","已记录" to "history","设置" to "settings")
     private lateinit var status: TextView
     private lateinit var syncDetails: TextView
     private val syncStatus by lazy { SyncStatusStore(this) }
@@ -56,7 +69,6 @@ class MainActivity : ComponentActivity() {
     private var retryButton: Button?=null
     private var input: EditText?=null
     private var imageStrip: LinearLayout?=null
-    private var historyList: LinearLayout?=null
     private var screen="capture"
     private var text=""
     private var saveId=UUID.randomUUID().toString()
@@ -64,10 +76,13 @@ class MainActivity : ComponentActivity() {
     private var rows=listOf<IdeaEntity>()
     private var ready=false
     private var saving=false
+    private var importing=false
     private var draftJob: Job?=null
     private val draftScope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private val picker=registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         lifecycleScope.launch {
+            importing=true;refreshCaptureActions()
+            try {
             for(uri in uris) {
                 if(images.size>=20) { message("每条最多20张图片");break }
                 try {
@@ -75,6 +90,7 @@ class MainActivity : ComponentActivity() {
                     images.add(image);persistDraft();renderImages()
                 } catch(error: Exception) { message(error.message ?: "图片未保存，文字仍保留") }
             }
+            } finally { importing=false;refreshCaptureActions() }
         }
     }
     private val exporter=registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -83,35 +99,74 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window,false)
         val outer=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(245,246,239))
             setPadding(dp(20),dp(20),dp(20),dp(12))
-            setOnApplyWindowInsetsListener { view,insets ->
-                view.setPadding(dp(20),insets.systemWindowInsetTop+dp(12),dp(20),insets.systemWindowInsetBottom+dp(8));insets
-            }
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(outer) { view,insets ->
+            val bars=insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val ime=insets.getInsets(WindowInsetsCompat.Type.ime())
+            view.setPadding(bars.left+dp(20),bars.top+dp(12),bars.right+dp(20),maxOf(bars.bottom,ime.bottom)+dp(8))
+            val typing=insets.isVisible(WindowInsetsCompat.Type.ime())
+            syncDetails.visibility=if(typing)View.GONE else View.VISIBLE
+            captureIntro?.visibility=if(typing)View.GONE else View.VISIBLE
+            insets
         }
         outer.addView(label("点子回声",24))
         status=label("正在读取本机记录…",12);outer.addView(status)
         syncDetails=label("",12);outer.addView(syncDetails)
-        val scroll=ScrollView(this)
-        content=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        scroll.addView(content)
-        outer.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
-        val nav=LinearLayout(this)
-        listOf("随手记" to "capture","已记录" to "history","设置" to "settings").forEach { (name,value) ->
-            nav.addView(button(name) { screen=value;render() },LinearLayout.LayoutParams(0,-2,1f))
+        pageTitle=label("",13).apply { id=R.id.page_title };outer.addView(pageTitle)
+        captureContent=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        historyContent=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        settingsContent=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        val pageViews=listOf(captureContent,historyContent,settingsContent).map { body ->
+            ScrollView(this).apply { isFillViewport=true;addView(body) }
         }
-        outer.addView(nav);setContentView(outer)
+        pager=ViewPager2(this).apply {
+            id=R.id.idea_pager
+            adapter=SwipePageAdapter(pageViews)
+            offscreenPageLimit=2
+        }
+        outer.addView(pager,LinearLayout.LayoutParams(-1,0,1f))
+        captureActions=LinearLayout(this).apply { id=R.id.capture_actions;orientation=LinearLayout.HORIZONTAL;setPadding(0,dp(8),0,0) }
+        pictureButton=button("＋ 添加图片") { if(ready && !saving && !importing)picker.launch(arrayOf("image/jpeg","image/png","image/webp")) }.apply { id=R.id.add_image }
+        saveButton=button("保存点子") { saveCurrentIdea() }.apply {
+            id=R.id.save_idea
+            backgroundTintList=ColorStateList.valueOf(Color.rgb(56,90,65));setTextColor(Color.WHITE)
+        }
+        captureActions.addView(pictureButton,LinearLayout.LayoutParams(-2,-2))
+        captureActions.addView(saveButton,LinearLayout.LayoutParams(0,-2,1f).apply { marginStart=dp(8) })
+        outer.addView(captureActions)
+        pager.registerOnPageChangeCallback(object: ViewPager2.OnPageChangeCallback() {
+            override fun onPageSelected(position: Int) {
+                val next=pages[position].second
+                if(screen!=next) {
+                    persistDraft();currentFocus?.clearFocus()
+                    WindowCompat.getInsetsController(window,outer).hide(WindowInsetsCompat.Type.ime())
+                }
+                screen=next
+                pageTitle.text="${pages[position].first}  ·  ${position+1} / ${pages.size}"
+                captureActions.visibility=if(position==0)View.VISIBLE else View.GONE
+            }
+        })
+        val initialPage=savedInstanceState?.getInt("idea_page",0)?.coerceIn(0,pages.lastIndex) ?: 0
+        pager.setCurrentItem(initialPage,false)
+        pageTitle.text="${pages[initialPage].first}  ·  ${initialPage+1} / ${pages.size}"
+        screen=pages[initialPage].second
+        captureActions.visibility=if(initialPage==0)View.VISIBLE else View.GONE
+        refreshCaptureActions();setContentView(outer);ViewCompat.requestApplyInsets(outer)
         syncStatus.register(syncListener)
         connectivity.registerDefaultNetworkCallback(networkCallback)
         lifecycleScope.launch {
             val draft=withContext(Dispatchers.IO) { db.dao().draft() }
             if(draft!=null) { text=draft.text;saveId=draft.saveId;images.addAll(LocalAttachment.decode(draft.imagesJson)) }
             ready=true;render()
-            db.dao().observeAll().collect { rows=it;refreshStatus();if(screen=="history")renderHistory() }
+            db.dao().observeAll().collect { rows=it;refreshStatus();renderHistory() }
         }
     }
+    override fun onSaveInstanceState(outState: Bundle) { outState.putInt("idea_page",pager.currentItem);super.onSaveInstanceState(outState) }
     override fun onResume() { super.onResume();observeSyncWork();account.accountId?.let { SyncWorker.enqueue(this,it) } }
     override fun onPause() { persistDraft();super.onPause() }
     override fun onDestroy() {
@@ -181,44 +236,51 @@ class MainActivity : ComponentActivity() {
     }
     private fun render() {
         if(!ready)return
-        content.removeAllViews();input=null;imageStrip=null;historyList=null;retryButton=null
-        when(screen) { "capture"->renderCapture();"history"->renderHistory();else->renderSettings() }
+        input=null;imageStrip=null;retryButton=null
+        renderCapture();renderHistory();renderSettings();refreshCaptureActions()
     }
     private fun renderCapture() {
-        content.addView(label("想到一句，就记一句。",22))
-        content.addView(label("不用起标题，也不用先分类。",13))
+        val content=captureContent;content.removeAllViews()
+        captureIntro=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            addView(label("想到一句，就记一句。",22));addView(label("不用起标题，也不用先分类。",13))
+        }.also { content.addView(it) }
         input=field("刚才想到……",text).apply {
+            id=R.id.capture_input
             minLines=6;maxLines=16;gravity=android.view.Gravity.TOP
             inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             addTextChangedListener(object: TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?,start: Int,count: Int,after: Int) {}
-                override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int) { this@MainActivity.text=s.toString();persistDraft() }
+                override fun onTextChanged(s: CharSequence?,start: Int,before: Int,count: Int) { this@MainActivity.text=s.toString();persistDraft();refreshCaptureActions() }
                 override fun afterTextChanged(s: Editable?) {}
             })
         }
         content.addView(input)
-        content.addView(button("＋ 添加照片或截图") { if(!saving)picker.launch(arrayOf("image/jpeg","image/png","image/webp")) })
         imageStrip=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL };content.addView(imageStrip);renderImages()
         content.addView(label("偶尔想说出来，可使用输入法的语音输入。",12))
-        val save=button("保存点子") {}
-        save.setOnClickListener {
-            if(saving || !CaptureRules.canSave(text,images.size))return@setOnClickListener
-            saving=true;save.isEnabled=false
-            input?.isEnabled=false
-            val snapshot=text;val selected=images.toList();val id=saveId
-            val queuedDraft=draftJob
-            lifecycleScope.launch {
-                try {
-                    queuedDraft?.join()
-                    withContext(Dispatchers.IO) { repository.saveCapture(snapshot,selected,id,account.accountId) }
-                    text="";images.clear();saveId=UUID.randomUUID().toString()
-                    input?.setText("");renderImages();message("已存本机，可以继续记下一条")
-                    account.accountId?.let { SyncWorker.enqueue(this@MainActivity,it) }
-                } catch(error: Exception) { message(error.message ?: "保存未成功，内容仍然保留")
-                } finally { saving=false;save.isEnabled=true;input?.isEnabled=true;persistDraft() }
-            }
+    }
+    private fun refreshCaptureActions() {
+        if(!::saveButton.isInitialized)return
+        saveButton.isEnabled=ready && !saving && !importing && CaptureRules.canSave(text,images.size)
+        pictureButton.isEnabled=ready && !saving && !importing
+        pager.isUserInputEnabled=!saving
+    }
+    private fun saveCurrentIdea() {
+        if(!ready || saving || importing || !CaptureRules.canSave(text,images.size))return
+        saving=true;refreshCaptureActions()
+        input?.isEnabled=false
+        val snapshot=text;val selected=images.toList();val id=saveId
+        val queuedDraft=draftJob
+        lifecycleScope.launch {
+            try {
+                queuedDraft?.join()
+                withContext(Dispatchers.IO) { repository.saveCapture(snapshot,selected,id,account.accountId) }
+                text="";images.clear();saveId=UUID.randomUUID().toString()
+                input?.setText("");renderImages();message("已存本机，可以继续记下一条")
+                account.accountId?.let { SyncWorker.enqueue(this@MainActivity,it) }
+            } catch(error: Exception) { message(error.message ?: "保存未成功，内容仍然保留")
+            } finally { saving=false;input?.isEnabled=true;persistDraft();refreshCaptureActions() }
         }
-        content.addView(save)
     }
     private fun renderImages() {
         imageStrip?.removeAllViews()
@@ -231,6 +293,7 @@ class MainActivity : ComponentActivity() {
             if(index>0)row.addView(button("前移") { if(!saving) { val prior=images[index-1];images[index-1]=image;images[index]=prior;renumber();persistDraft();renderImages() } })
             imageStrip?.addView(row)
         }
+        refreshCaptureActions()
     }
     private fun renumber() { images.indices.forEach { images[it]=images[it].copy(order=it) } }
     private fun loadImage(view: ImageView,path: String,size: Int) {
@@ -251,6 +314,7 @@ class MainActivity : ComponentActivity() {
         AlertDialog.Builder(this).setView(image).setPositiveButton("关闭",null).show()
     }
     private fun renderHistory() {
+        val content=historyContent
         content.removeAllViews();content.addView(label("已记录",22))
         retryButton=button("立即重试同步") {
             account.accountId?.let {
@@ -276,7 +340,7 @@ class MainActivity : ComponentActivity() {
                     strip.addView(thumbnail)
                     loadImage(thumbnail,image.path,256)
                 }
-                content.addView(HorizontalScrollView(this).apply { addView(strip) })
+                content.addView(HistoryImageScroller(this).apply { addView(strip) })
             }
             content.addView(button("编辑原文") {
                 val edit=field("原始点子",item.text).apply { minLines=4;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE }
@@ -296,6 +360,7 @@ class MainActivity : ComponentActivity() {
         if(rows.isEmpty())content.addView(label("还没有点子，先记一句。"))
     }
     private fun renderSettings() {
+        val content=settingsContent;content.removeAllViews()
         content.addView(label("连接你的私人收件箱",22))
         content.addView(label("不连接也可以离线记录。联网后登录，才会上传。",13))
         val server=field("服务器地址：https://…",account.server)

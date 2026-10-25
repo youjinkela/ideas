@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item type="id" name="idea_pager" />
+    <item type="id" name="capture_input" />
+    <item type="id" name="capture_actions" />
+    <item type="id" name="save_idea" />
+    <item type="id" name="add_image" />
+    <item type="id" name="page_title" />
+</resources>

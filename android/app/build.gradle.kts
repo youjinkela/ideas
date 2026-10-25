@@ -33,6 +33,12 @@ android {
     }
 }
 dependencies {
+    implementation("androidx.viewpager2:viewpager2:1.1.0")
+    constraints {
+        implementation("androidx.fragment:fragment:1.8.9") {
+            because("ViewPager2's legacy Fragment dependency is incompatible with Activity Result")
+        }
+    }
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")
     implementation("androidx.room:room-runtime:2.8.5")
