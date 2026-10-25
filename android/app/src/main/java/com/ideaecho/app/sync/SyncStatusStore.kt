@@ -19,11 +19,13 @@ class SyncStatusStore(context: Context) {
         val key=key(server,owner)
         preferences.edit().putLong("$key-attempt",System.currentTimeMillis()).apply()
     }
-    fun finished(server: String,owner: String,uploaded: Boolean) {
+    fun recordUploaded(server: String,owner: String) {
         val key=key(server,owner)
-        preferences.edit().remove("$key-error").remove("$key-login").apply {
-            if(uploaded)putLong("$key-success",System.currentTimeMillis())
-        }.apply()
+        preferences.edit().putLong("$key-success",System.currentTimeMillis()).apply()
+    }
+    fun finished(server: String,owner: String) {
+        val key=key(server,owner)
+        preferences.edit().remove("$key-error").remove("$key-login").apply()
     }
     fun failed(server: String,owner: String,error: Throwable) {
         val key=key(server,owner)

@@ -24,7 +24,6 @@ class SyncRepository(private val context: Context,private val db: AppDatabase,pr
         if(account.accountId!=accountId)return@withLock true
         val server=account.server
         val status=SyncStatusStore(context)
-        var uploaded=false
         status.started(server,accountId)
         try {
         val api=IdeaApi(account.server,account.token)
@@ -61,7 +60,7 @@ class SyncRepository(private val context: Context,private val db: AppDatabase,pr
                         val sent=item.pendingRevision!!
                         db.dao().update(latest.copy(rawVersion=ack.getInt("accepted_version"),syncedRevision=if(SyncRules.canMarkSynced(latest.revision,sent,true))sent else latest.syncedRevision,pendingMutation=null,pendingPayload=null,pendingRevision=null,syncError=null))
                     }
-                    uploaded=true
+                    status.recordUploaded(server,accountId)
                 } catch(error: Exception) {
                     if(error is kotlinx.coroutines.CancellationException)throw error
                     db.withTransaction {
@@ -73,7 +72,7 @@ class SyncRepository(private val context: Context,private val db: AppDatabase,pr
                 }
             }
         }
-        status.finished(server,accountId,uploaded)
+        status.finished(server,accountId)
         true
         } catch(error: kotlinx.coroutines.CancellationException) { throw error
         } catch(error: Exception) { status.failed(server,accountId,error);throw error }

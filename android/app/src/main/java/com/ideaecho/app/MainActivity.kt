@@ -313,7 +313,7 @@ class MainActivity : ComponentActivity() {
                     val result=withContext(Dispatchers.IO) { IdeaApi(server.text.toString().trim()).request("POST","/v1/auth/login",JSONObject().put("username",username.text.toString()).put("password",password.text.toString())) }
                     account.save(server.text.toString().trim(),result.getString("account_id"),result.getString("token"));password.setText("")
                     val owner=account.accountId!!
-                    syncStatus.finished(account.server,owner,false);observeSyncWork()
+                    syncStatus.finished(account.server,owner);observeSyncWork()
                     val local=withContext(Dispatchers.IO) { db.dao().all().filter { it.owner==null }.map { it.id } }
                     if(local.isNotEmpty())AlertDialog.Builder(this@MainActivity).setTitle("上传此前的本机记录？").setMessage("将 ${local.size} 条未关联记录上传到这个账号。其他账号的记录不会上传。")
                         .setNegativeButton("暂不上传",null).setPositiveButton("确认上传") { _,_->lifecycleScope.launch { sync.claimLocalRecords(owner,local);SyncWorker.enqueue(this@MainActivity,owner) } }.show()

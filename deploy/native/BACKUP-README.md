@@ -37,6 +37,8 @@ curl --fail --max-time 5 http://127.0.0.1:8000/health
 
 每份备份包含数据库与已确认的引用图片，不包含有效登录会话。先检查图像哈希，再恢复到独立临时空目录并检查数据库完整性，成功后原子发布压缩包，最后轮换。保留最近 7 个有备份的日期及 4 个 ISO 周的最新备份，重叠合并；损坏图片或恢复失败时不轮换旧备份。只轮换专用目录内符合 `idea-echo-YYYYMMDDTHHMMSS.zip` 的文件，不处理其他命名文件。
 
+日期和周按文件名中的 UTC 时间分组，不按北京时间分组。同一 UTC 日期的新备份成功后，较早的同日副本可能被轮换；例如北京时间 10 月 24 日下午的手工备份与 10 月 25 日凌晨 3 点的自动备份都可能属于 UTC 的 10 月 24 日。下载到电脑的异地副本不参与服务器轮换。
+
 ## 日常使用与关闭
 
 ```bash
@@ -72,5 +74,7 @@ systemctl disable --now idea-echo-native-backup.timer
 原始 Windows 打包文件权限为 0666，root 解压保留该权限时，systemd 校验临时目录中的配置会提示 world-writable。安装脚本已通过 `install -o root -g root -m 0644` 设置正式脚本与两个正式配置的权限；用 `stat` 核对即可，无需重装。上方解压命令增加 `umask 077` 和 `--no-same-permissions`，供后续安装使用；已交付压缩包和校验值没有改变。
 
 后续验收已确认正式三份文件均为 `644 root:root`；2026-10-24 的首次 ZIP 已下载到电脑，整包 SHA256 与服务器一致，独立恢复后数据库、业务记录数量及 2 张图片验证通过。详见 [电脑异地恢复记录](../../docs/diagnostics/2026-10-24-offsite-backup-restore.md)。日历自动触发仍以随后服务器日志为准。
+
+2026-10-25 用户提供的服务器日志已确认首次日历触发：北京时间 03:00:16 启动，03:00:17 输出 `restore_checked: true`，03:00:18 正常结束；生成 `idea-echo-20261024T190017.zip`，轮换删除同一 UTC 日期内的较早副本 1 份。定时器下次为 10 月 26 日约 03:00。电脑上的首次下载 ZIP 已再次校验并保留。
 
 配置依据：[systemd 定时器](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html)、[日历与时区格式](https://www.freedesktop.org/software/systemd/man/latest/systemd.time.html)。

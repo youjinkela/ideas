@@ -13,7 +13,7 @@ Windows 手动备份：`scripts/backup.ps1 -OutputFile <明确的zip路径>`。�
 
 恢复会生成新的同步代次；电脑检测到代次变化后从头重拉事件，不丢弃本机待传编辑。这样即使恢复较早备份、服务器序号回退，也不会因为电脑仍记着较大的游标而漏收新点子。
 
-轮换只处理 `idea-echo-YYYYMMDDTHHMMSS.zip`，保留最新7个有备份的日期和4个ISO周的最新备份；重叠合并。保留点校验通过后才删除多余同名规则文件；其他文件不动。执行前请确认目录：
+轮换只处理 `idea-echo-YYYYMMDDTHHMMSS.zip`，按文件名中的 UTC 日期和 ISO 周分组，保留最新7个有备份的日期和4个ISO周的最新备份；重叠合并，同一天只保留较新恢复点。文件名的 UTC 日期与北京时间日期可能不同。保留点校验通过后才删除多余同名规则文件；其他文件不动。执行前请确认目录：
 
 ```powershell
 .venv/Scripts/python.exe -m idea_echo.backup rotate --directory <专用备份目录>

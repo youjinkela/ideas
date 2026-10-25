@@ -3,7 +3,7 @@ import runpy
 import sqlite3
 import pytest
 from test_attachments import register
-from idea_echo.backup import restore_backup
+from idea_echo.backup import create_backup, restore_backup
 
 RUNNER = Path(__file__).resolve().parents[2] / 'deploy/native/backup-job.py'
 
@@ -43,3 +43,23 @@ def test_failed_backup_keeps_existing_recovery_point(setup_api, tmp_path):
         runner()(settings.data_dir, folder)
     assert previous.read_bytes() == b'existing backup is untouched'
     assert list(folder.iterdir()) == [previous]
+
+
+def test_failed_backup_never_rotates_eligible_history(setup_api, tmp_path):
+    """Moving rotation before successful creation would delete these older daily points."""
+    client, auth, _, settings = setup_api
+    aid, image = register(client, auth)
+    assert client.put(f'/v1/attachments/{aid}/content', headers=auth, content=image).status_code == 200
+    seed = tmp_path / 'verified-seed.zip'
+    create_backup(settings.data_dir, seed)
+    content = seed.read_bytes()
+    folder = tmp_path / 'backups'
+    folder.mkdir()
+    names = {f'idea-echo-202609{day:02d}T030000.zip' for day in range(1, 15)}
+    for name in names:
+        (folder / name).write_bytes(content)
+    (settings.data_dir / 'attachments' / aid).write_bytes(b'damaged fixture')
+    with pytest.raises(ValueError):
+        runner()(settings.data_dir, folder)
+    assert {entry.name for entry in folder.iterdir()} == names
+    assert all((folder / name).read_bytes() == content for name in names)
