@@ -325,8 +325,7 @@ class MainActivity : ComponentActivity() {
         }
         content.addView(retryButton);refreshSyncDetails()
         for(item in rows) {
-            content.addView(label(CaptureRules.title(item.text,item.recordedAt),18))
-            content.addView(label(item.text))
+            content.addView(label(item.text.takeIf { it.isNotBlank() } ?: CaptureRules.title("",item.recordedAt),18))
             val state=when {item.owner==null->"仅存本机，待关联账号";item.syncedRevision>=item.revision->"已同步";item.syncError.orEmpty().startsWith("conflict:")->"版本冲突，手机与云端内容都保留";else->item.syncError ?: "已存本机，待上传"}
             content.addView(label(state,12))
             val savedImages=LocalAttachment.decode(item.imagesJson).sortedBy { it.order }
