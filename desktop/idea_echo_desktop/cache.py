@@ -17,7 +17,6 @@ class Cache:
                 CREATE TABLE IF NOT EXISTS outbox(id TEXT,kind TEXT,request TEXT,conflict TEXT,PRIMARY KEY(id,kind));
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
                 CREATE TABLE IF NOT EXISTS archives(id TEXT PRIMARY KEY,data TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS ai_messages(id INTEGER PRIMARY KEY,idea_id TEXT,role TEXT,text TEXT);
             """)
 
     @contextmanager

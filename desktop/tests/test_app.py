@@ -45,17 +45,14 @@ def test_session_origin_and_csrf_guard_filesystem_actions(tmp_path):
         assert client.get("/local/ideas",headers={"Host":"evil.example"}).status_code==403
 
 
-def test_reflection_is_durable_and_does_not_auto_call_ai(tmp_path):
+def test_user_reflection_is_durable(tmp_path):
     app=desktop(tmp_path);app.state.cache.apply_events([raw_event()])
-    def forbidden(*args,**kwargs):raise AssertionError("AI must not run without explicit action")
-    app.state.ai_call=forbidden
     with TestClient(app,base_url=ORIGIN) as client:
         h=session(client)
         assert len(client.get("/local/ideas").json()["ideas"])==1
         response=client.post("/local/reflection",headers=h,json={"id":raw_event()["entity_id"],"reflection":"我来编辑"})
         assert response.status_code==200
         assert app.state.cache.get(raw_event()["entity_id"])["reflection"]=="我来编辑"
-        assert client.post("/local/ai/ask",headers=h,json={"id":raw_event()["entity_id"],"mode":"ask"}).status_code==409
 
 
 def test_settings_do_not_disclose_secrets(tmp_path):

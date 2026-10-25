@@ -4,7 +4,7 @@
 
 **Goal:** 构建适配华为 P40 的图文离线记录 App，经私人云端同步到每天 19:00 的电脑回顾页，并按用户选择归档到本地 Obsidian。
 
-**Architecture:** 安卓 App 以本地数据库和私有图片文件为保存起点，云端提供版本化记录与私有附件 API。Windows 伴随程序提供本机回顾网页、提醒、AI 调用和受限笔记库写入。三端共用一份协议与样例，首轮联调用本机服务器，公网部署随后进行。
+**Architecture:** 安卓 App 以本地数据库和私有图片文件为保存起点，云端提供版本化记录与私有附件 API。Windows 伴随程序提供本机回顾网页、提醒和受限笔记库写入。三端共用一份协议与样例，首轮联调用本机服务器，公网部署随后进行。2026-10-25用户取消内置AI，Task9已退役。
 
 **Tech Stack:** Kotlin、Android Views、Room、WorkManager；Python/FastAPI、SQLite；普通 HTML/CSS/JavaScript；Caddy、Linux；pytest、JUnit、Android instrumentation、Playwright。
 
@@ -16,11 +16,11 @@
 - 记录以一两句话为主，手机界面以快速输入和连续记录为优先。
 - 点子记录支持插入图片，手机记录、离线保存、云端同步、电脑回顾和 Obsidian 归档均需保留图片。
 - 手机离线也能记录，联网后自动上传。
-- 用户主导编辑。AI 仅在点击时回应，用于追问、澄清、发散。
+- 用户主导编辑与筛选，不集成AI；需要时由用户自行在外部工具提问。
 - 默认新建一篇笔记，另提供追加到已有笔记的操作。
 - 时区固定以 Asia/Shanghai 计算，首版每天 19:00。
 - 归档不删除云端原文。
-- 图片默认不发送给 AI，也不自动 OCR。
+- 不内置模型调用，图片不自动 OCR。
 - 不依赖 Google 登录、Firebase 或 Google Play 服务。
 - 本文件不授权购买服务器/域名、修改真实笔记、设置系统自启动或部署到公网。
 
@@ -30,7 +30,7 @@
 - 点子创建成功但图片只传了一半，同时用户退出 App：旧数据仍可读，未完成附件不误报已同步；Task 3、6。
 - 手机时间错误或旧点子补传：列表不漏记录，补提醒按电脑上海日期，不能靠设备时间作为同步游标；Task 2、10。
 - 已选目录被移动、链接指向库外、Markdown 文件被 Obsidian 同时修改：停止不安全写入并保留可重试内容；Task 8。
-- 私密原文包含 HTML、脚本、伪造系统指令或图片链接：界面不执行，AI 不获得文件权限或图片，日志不泄露；Task 7、9。
+- 私密原文包含 HTML、脚本或图片链接：界面不执行，日志不泄露；Task 7。
 
 ---
 
@@ -71,9 +71,9 @@ desktop/idea_echo_desktop/
   app.py, settings.py       loopback 服务、本地会话、设置
   cache.py, sync.py         本机缓存与云端队列
   vault.py, archive.py      目录边界、归档与操作日志
-  ai.py, reminders.py       主动 AI 与本机提醒
-desktop/web/                静态回顾页、导出对话框和 AI 区
-desktop/tests/              缓存、安全写入、AI、提醒测试
+  reminders.py              本机提醒
+desktop/web/                静态回顾页和归档对话框
+desktop/tests/              缓存、安全写入、提醒与旧数据兼容测试
 tests/e2e/                 跨服务/浏览器场景；全部用临时笔记库
 scripts/                   本地启动、检查、APK 构建/签名与诊断
 deploy/                    容器、Caddy、备份调度样例
@@ -104,7 +104,7 @@ Task 1 将以下内容写成正式 JSON Schema 和样例；后续任务引用，
 | 阶段 | 任务 | 可实际体验的结果 |
 |---|---|---|
 | A | 1–6 | 安装 App，离线存图文，联网后同步到本机测试服务器 |
-| B | 7–10 | 电脑回顾、选择目录归档图文、按需 AI、19:00 提醒 |
+| B | 7–10（9已退役） | 电脑手动回顾、选择目录归档图文、19:00 提醒 |
 | C | 11–12 | 可恢复备份、可升级 APK、真机验收、准备正式部署 |
 
 ### Task 1：建立可验证协议与本地健康检查服务
@@ -187,7 +187,7 @@ Task 1 将以下内容写成正式 JSON Schema 和样例；后续任务引用，
 
 - [ ] 写缓存测试：断网编辑重启后仍在；changes 多页全量取回；错时钟点子不丢。浏览器测试 `review.spec.js` 断言切换点子保留草稿、旧待回顾可见、图片待传占位、原文含 `<script>` 不执行、切换/编辑绝不调用 AI。
 - [ ] 执行 `python -m pytest desktop/tests/test_cache.py -q` 与 `npx playwright test tests/e2e/review.spec.js`，确认失败。
-- [ ] 实现本机缓存/outbox、文件选择设置入口、回顾三栏、原图查看、自动保存提示、待回顾/已回顾/已归档过滤；正文用 textContent 或安全 Markdown 渲染，禁用原生 HTML。用 `python -m pip install -e "./desktop[test]"` 安装本机服务；Node 项目只含 Playwright 测试依赖，不引入生产前端构建链，锁定 npm 依赖。会话用 HttpOnly/SameSite=Strict cookie，校验 Host、Origin 和 CSRF；启动令牌不写 URL 查询或访问日志。
+- [ ] 实现本机缓存/outbox、文件选择设置入口、回顾两栏、原图查看、自动保存提示、待回顾/已回顾/已归档过滤；正文用 textContent 或安全 Markdown 渲染，禁用原生 HTML。用 `python -m pip install -e "./desktop[test]"` 安装本机服务；Node 项目只含 Playwright 测试依赖，不引入生产前端构建链，锁定 npm 依赖。会话用 HttpOnly/SameSite=Strict cookie，校验 Host、Origin 和 CSRF；启动令牌不写 URL 查询或访问日志。
 - [ ] 重跑测试；暂停云端服务后回顾、编辑、重启，再恢复同步，确认无数据丢失和伪成功提示。
 - [ ] 提交 `feat: add private desktop review with durable local edits`。
 
@@ -203,17 +203,13 @@ Task 1 将以下内容写成正式 JSON Schema 和样例；后续任务引用，
 - [ ] 重跑测试；只用临时库模拟两个目标目录、新建、追加、重复重试和中断恢复，再断开云端检查图文可读；跨站请求与库外写入均拒绝。
 - [ ] 提交 `feat: archive reviewed ideas and images safely into obsidian`。
 
-### Task 9：用户主动调用的 AI 辅助
+### Task 9：已取消内置 AI（2026-10-25）
 
-**Files:** 创建 `desktop/idea_echo_desktop/ai.py`、`desktop/tests/test_ai.py`；修改本机 app、settings 和网页 AI 区。
+用户选择在外部AI工具中自行提问，认为集成会使记录工具臃肿。原模型适配器、路由、侧栏和配置入口已从当前范围撤销，不再作为待接通功能。
 
-**Interfaces:** `ask_ai(request: AiRequest, settings: AiSettings) -> AiReply`；`POST /local/ai/ask`，AiRequest={idea_id,mode,prompt,reflection,conversation}，mode=ask|clarify|expand|custom；仅本机请求有权限的单条点子，图片字节/URL和库中文件不进入请求。适配用户配置的 HTTPS 模型端点，密钥由本机安全配置保存。
-
-- [ ] 写 `test_no_call_without_explicit_post`、`test_only_current_text_is_sent`、`test_images_and_vault_are_never_sent`、`test_timeout_keeps_draft`、`test_response_is_not_auto_inserted`、`test_missing_config_returns_setup_required`；提示注入不能给模型开文件/执行工具权限，UI 将输出作为文本。
-- [ ] 执行 `python -m pytest desktop/tests/test_ai.py -q`，确认失败。
-- [ ] 实现配置适配器和三按钮/自由提问入口，超时30秒、默认输出上限2000 tokens、每分钟5次；长上下文给出可见截断提示。AI 回复独立存放，只有点击“加入我的发散”才插入；未配置不伪造回复，测试用假服务不产生费用。
-- [ ] 重跑测试及 Task 7 浏览器场景，确认编辑/切换/归档不触发模型调用，模型失败仍能保存和归档。
-- [ ] 提交 `feat: provide opt-in ai questions and brainstorming assistance`。
+- 保留用户手动编辑、同步、提醒与归档能力；回顾页改为两栏。
+- 不删除旧版本可能已有的对话表和加密配置，不新增模型账号或密钥要求。
+- 用兼容性及浏览器回归确认模型入口移除，原始图文、手动编辑与新建/追加归档不受影响。
 
 ### Task 10：19:00 提醒、补提醒与可选自启动
 
@@ -248,7 +244,7 @@ Task 1 将以下内容写成正式 JSON Schema 和样例；后续任务引用，
 - [ ] 写全流程测试：文字+两图从 API 上传→本机回顾→用户修改→选择两种归档→断网查看本地图片→重试不重复；另外覆盖409冲突和模型超时不影响归档。测试不涉及真实笔记库或计费模型。
 - [ ] 执行 `python -m pytest tests/e2e/test_full_journey.py -q`，确认未完成连接的场景失败，再补齐必要组件连接。
 - [ ] 完成构建/签名脚本、版本和迁移记录、用户持有签名密钥的备份步骤；提供环境、部署、维护、恢复的学习顺序。对未验证的 P40/正式服务器项目保留明确待验状态。
-- [ ] 运行 `python -m pytest server/tests desktop/tests tests/e2e -q`、Playwright 浏览器场景、Android `assembleDebug testDebugUnitTest lintDebug`、有设备时 `connectedDebugAndroidTest`；每类一次完整运行，只有新变更/失败时重跑相关范围。审查权限、默认 AI 关闭、脱网附件和备份证据；记录实际结果，不能用接口测试代替实机后台测试。
+- [ ] 运行 `python -m pytest server/tests desktop/tests tests/e2e -q`、Playwright 浏览器场景、Android `assembleDebug testDebugUnitTest lintDebug`、有设备时 `connectedDebugAndroidTest`；每类一次完整运行，只有新变更/失败时重跑相关范围。审查权限、无内置模型入口、脱网附件和备份证据；记录实际结果，不能用接口测试代替实机后台测试。
 - [ ] 提交 `release: document verified idea echo workflow and artifacts`；按分支收尾技能报告集成选项，不擅自推送远程、购买或部署。
 
 ## 需求覆盖与计划自审

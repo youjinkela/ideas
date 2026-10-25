@@ -58,10 +58,11 @@ class DesktopSettings:
     def update(self,**values):
         updated=dict(self.values)
         for key,value in values.items():
+            # Preserve encrypted legacy ai_key values when reopening older settings.
             updated[key]=base64.b64encode(secret_transform(value.encode())).decode() if key in ("cloud_token","ai_key") and value else value
         atomic_write(self.file,json.dumps(updated,ensure_ascii=False).encode())
         self.values=updated
 
     def public(self):
-        return {k:self.get(k) for k in ("cloud_url","account_id","vault","ai_url","ai_model")} | {"cloud_connected":bool(self.get("cloud_token")),"ai_configured":bool(self.get("ai_key"))}
+        return {k:self.get(k) for k in ("cloud_url","account_id","vault")} | {"cloud_connected":bool(self.get("cloud_token"))}
 

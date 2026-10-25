@@ -19,16 +19,30 @@ test('non-JSON local error is explained without leaking response text',async({pa
   await expect(page.locator('#notice')).not.toContainText('private-debug-marker');
 });
 
-test('user edits survive switching; raw scripts never execute; AI stays idle', async ({ page }) => {
-  const aiRequests=[];
-  page.on('request',r=>{ if(r.url().includes('/local/ai/ask')) aiRequests.push(r.url()); });
+test('user edits survive switching and raw scripts never execute', async ({ page }) => {
   await page.getByRole('button',{name:/早晨的图文点子/}).click();
   await page.locator('#reflection').fill('由我补充的思路');
   await page.getByRole('button',{name:/昨晚没有回顾/}).click();
   await page.getByRole('button',{name:/早晨的图文点子/}).click();
   await expect(page.locator('#reflection')).toHaveValue('由我补充的思路');
   expect(await page.evaluate(()=>window.__injected)).toBeUndefined();
-  expect(aiRequests).toEqual([]);
+});
+
+test('review and settings expose no integrated model controls or requests',async({page})=>{
+  const modelRequests=[];
+  page.on('request',r=>{if(r.url().includes('/local/ai/'))modelRequests.push(r.url());});
+  await expect(page.getByRole('button',{name:'追问一个问题'})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'帮我弄清楚'})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'换几个角度'})).toHaveCount(0);
+  await page.getByRole('button',{name:/早晨的图文点子/}).click();
+  await page.getByRole('button',{name:/昨晚没有回顾/}).click();
+  await page.locator('#settingsOpen').click();
+  await expect(page.getByLabel('服务器根地址')).toBeVisible();
+  await expect(page.locator('#chooseVault')).toBeVisible();
+  await expect(page.locator('#aiUrl,#aiModel,#aiKey,#aiPrompt,#aiSend')).toHaveCount(0);
+  await page.locator('#saveSettings').click();
+  await expect(page.locator('#notice')).toContainText('连接设置已保存');
+  expect(modelRequests).toEqual([]);
 });
 
 test('images render; new note destination and append are explicit', async ({ page }) => {

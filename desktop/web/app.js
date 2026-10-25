@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
-let csrf='',ideas=[],current=null,preview=null,aiOwner=null,lastAi='',saveTimer,noticeTimer,saveTail=Promise.resolve();
+let csrf='',ideas=[],current=null,preview=null,saveTimer,noticeTimer,saveTail=Promise.resolve();
 const drafts=new Map();
 async function api(path,body){
   const response=await fetch(path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},...(body===undefined?{}:{body:JSON.stringify(body)})});
@@ -62,21 +62,19 @@ async function select(id){
     for(const [label,keep] of [['保留我的版本',true],['采用云端版本',false]]){const b=document.createElement('button');b.textContent=label;b.onclick=guarded(async()=>{await api('/local/conflict',{id,kind,keep_local:keep});await load();await select(id);});box.append(b);}
     $('conflicts').append(box);
   }
-  $('aiAnswer').textContent='';$('addAi').hidden=true;aiOwner=null;lastAi='';renderList();
-  const history=await api('/local/ai/history?id='+encodeURIComponent(id));
-  if(current?.id===id&&history.messages.length)$('aiAnswer').textContent=history.messages.map(m=>(m.role==='user'?'我：':'AI：')+m.text).join('\n\n');
+  renderList();
 }
 $('reflection').addEventListener('input',queueDraft);
 $('view').onchange=guarded(async()=>{await flush();current=null;await load();});
 $('sync').onclick=guarded(async()=>{await flush();$('sync').disabled=true;try{const result=await api('/local/sync',{});notice(result.setup_required?'先在设置里连接服务器':result.error||'同步完成');await load();}finally{$('sync').disabled=false;}});
 async function setStatus(value){if(!current)return;await flush();await api('/local/status',{id:current.id,value});await load();}
 $('later').onclick=guarded(()=>setStatus('later'));$('reviewed').onclick=guarded(()=>setStatus('reviewed'));
-async function settings(){const s=await api('/local/settings');$('cloudUrl').value=s.cloud_url||'';$('aiUrl').value=s.ai_url||'';$('aiModel').value=s.ai_model||'';$('vaultPath').textContent=s.vault||'尚未选择';$('settingsDialog').showModal();}
+async function settings(){const s=await api('/local/settings');$('cloudUrl').value=s.cloud_url||'';$('vaultPath').textContent=s.vault||'尚未选择';$('settingsDialog').showModal();}
 $('settingsOpen').onclick=$('emptySettings').onclick=guarded(settings);
 $('chooseVault').onclick=guarded(async()=>{const s=await api('/local/vault/select',{});$('vaultPath').textContent=s.vault||'尚未选择';});
 $('saveSettings').onclick=guarded(async()=>{
   const button=$('saveSettings');button.disabled=true;
-  try{await flush();await api('/local/settings',{cloud_url:$('cloudUrl').value.trim(),username:$('cloudUser').value.trim(),password:$('cloudPassword').value,ai_url:$('aiUrl').value.trim(),ai_model:$('aiModel').value.trim(),ai_key:$('aiKey').value});$('cloudPassword').value='';$('aiKey').value='';$('settingsDialog').close();current=null;await load();notice('连接设置已保存');}finally{button.disabled=false;}
+  try{await flush();await api('/local/settings',{cloud_url:$('cloudUrl').value.trim(),username:$('cloudUser').value.trim(),password:$('cloudPassword').value});$('cloudPassword').value='';$('settingsDialog').close();current=null;await load();notice('连接设置已保存');}finally{button.disabled=false;}
 });
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).close());
 function invalidatePreview(){preview=null;$('commitArchive').disabled=true;$('archivePreview').textContent='';$('archiveDestination').textContent='';}
@@ -100,14 +98,6 @@ $('commitArchive').onclick=guarded(async()=>{
   if(!preview)return;$('commitArchive').disabled=true;
   try{const result=await api('/local/archive/commit',{operation_id:preview.operation_id});await api('/local/archive/ack',{operation_id:preview.operation_id});$('archiveDialog').close();notice('已保存到 '+result.path);preview=null;await load();}catch(e){$('commitArchive').disabled=false;throw e;}
 });
-async function ask(mode){
-  if(!current){notice('先选择一个点子');return;}
-  await flush();const id=current.id;$('aiSend').disabled=true;
-  try{const result=await api('/local/ai/ask',{id,mode,prompt:$('aiPrompt').value});if(current?.id!==id)return;lastAi=result.text;aiOwner=id;$('aiAnswer').textContent=result.text+(result.truncated?'\n\n（本次上下文已截断）':'');$('addAi').hidden=false;}finally{$('aiSend').disabled=false;}
-}
-document.querySelectorAll('[data-ai]').forEach(b=>b.onclick=guarded(()=>ask(b.dataset.ai)));
-$('aiSend').onclick=guarded(()=>ask('custom'));
-$('addAi').onclick=()=>{if(current?.id!==aiOwner)return;$('reflection').value+=($('reflection').value?'\n\n':'')+lastAi;queueDraft();$('addAi').hidden=true;notice('已加入，可继续修改');};
 (async()=>{
   try{const bootstrap=location.hash.slice(1);history.replaceState(null,'',location.pathname);const session=await api('/local/session',bootstrap?{bootstrap}:undefined);csrf=session.csrf;await load();}
   catch(e){$('appStatus').textContent='请从本机启动程序打开';notice(e.message);}

@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-from collections import deque
 from contextlib import asynccontextmanager,suppress
 from datetime import datetime,date
 import json
@@ -8,7 +7,6 @@ from pathlib import Path
 import secrets
 import socket
 import threading
-import time
 from urllib.parse import urlsplit
 from uuid import UUID
 import webbrowser
@@ -17,7 +15,6 @@ import httpx
 from fastapi import FastAPI,Request,HTTPException
 from fastapi.responses import FileResponse,JSONResponse,Response
 from fastapi.staticfiles import StaticFiles
-from .ai import AiSettings,ask_ai
 from .archive import ArchiveManager
 from .cache import Cache
 from .reminders import claim_reminder,send_reminder,SHANGHAI
@@ -29,7 +26,7 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
     settings=DesktopSettings(root)
     sid=secrets.token_urlsafe(32);csrf=secrets.token_urlsafe(32)
     bootstrap=bootstrap or secrets.token_urlsafe(32)
-    sync_lock=threading.Lock();ai_times=deque()
+    sync_lock=threading.Lock()
 
     def cache_for_account():
         account=settings.get("account_id")
@@ -67,7 +64,6 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
     app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
     app.state.bootstrap=bootstrap
     app.state.cache=cache_for_account()
-    app.state.ai_call=ask_ai
     app.state.sync_error=""
     app.state.settings=settings
     web=Path(__file__).resolve().parent.parent/"web"
@@ -135,6 +131,8 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
 
     @app.post("/local/settings")
     def set_settings(body: dict):
+        if any(str(key).startswith("ai_") for key in body):
+            raise HTTPException(400,"当前版本设置已精简，请刷新页面后重试")
         values={}
         if body.get("cloud_url") and body.get("username") and body.get("password"):
             url=validate_cloud_url(body["cloud_url"])
@@ -146,10 +144,6 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
             if response.status_code!=200:raise HTTPException(401,"连接失败，请核对服务器地址与账号")
             result=response.json()
             values.update(cloud_url=url,cloud_token=result["token"],account_id=str(UUID(result["account_id"])))
-        if body.get("ai_url"):
-            if not str(body["ai_url"]).startswith("https://"):raise ValueError("模型接口必须使用 HTTPS")
-            values.update(ai_url=body["ai_url"].rstrip("/"),ai_model=str(body.get("ai_model","")))
-        if body.get("ai_key"):values["ai_key"]=str(body["ai_key"])
         settings.update(**values)
         if "account_id" in values:app.state.cache=cache_for_account()
         return settings.public()
@@ -201,27 +195,6 @@ def create_desktop_app(root: Path,origin="http://127.0.0.1:47821",bootstrap=None
             for item in idea.get("attachments",[]):
                 if item["id"]==str(aid):mime=item["mime_type"]
         return FileResponse(path,media_type=mime)
-
-    @app.get("/local/ai/history")
-    def ai_history(id: UUID):
-        with app.state.cache.db() as con:
-            return {"messages":[dict(r) for r in con.execute("SELECT role,text FROM ai_messages WHERE idea_id=? ORDER BY id",(str(id),))]}
-
-    @app.post("/local/ai/ask")
-    def ai_ask(body: dict):
-        if not settings.get("ai_key"):raise HTTPException(409,"请先在设置里配置模型接口")
-        now=time.monotonic()
-        while ai_times and ai_times[0]<now-60:ai_times.popleft()
-        if len(ai_times)>=5:raise HTTPException(429,"请稍等，每分钟最多请求5次")
-        ai_times.append(now)
-        id=str(UUID(body["id"]));idea=app.state.cache.get(id)
-        history=ai_history(UUID(id))["messages"]
-        request={"text":idea["text"],"reflection":idea.get("reflection",""),"mode":body.get("mode","custom"),"prompt":str(body.get("prompt","")),"conversation":[{"role":m["role"],"content":m["text"]} for m in history]}
-        result=app.state.ai_call(request,AiSettings(settings.get("ai_url"),settings.get("ai_model"),settings.secret("ai_key")))
-        with app.state.cache.db() as con:
-            con.execute("INSERT INTO ai_messages(idea_id,role,text) VALUES(?,?,?)",(id,"user",request["prompt"] or request["mode"]))
-            con.execute("INSERT INTO ai_messages(idea_id,role,text) VALUES(?,?,?)",(id,"assistant",result["text"]))
-        return result
 
     @app.get("/")
     def index():
