@@ -31,7 +31,12 @@ function renderList(){
   $('ideaList').replaceChildren(...ideas.map(idea=>{
     const b=document.createElement('button');b.className='idea'+(current?.id===idea.id?' active':'');
     const strong=document.createElement('strong');strong.textContent=title(idea);
-    const small=document.createElement('small');small.textContent=new Date(idea.recorded_at).toLocaleString('zh-CN')+' · '+({pending:'待回顾',later:'留待下次',reviewed:'已回顾',archived:'已归档'}[idea.status||'pending']);
+    const small=document.createElement('small');small.className='idea-meta';
+    const date=document.createElement('span');date.textContent=new Date(idea.recorded_at).toLocaleString('zh-CN');
+    const status=idea.status||'pending';
+    const badge=document.createElement('span');badge.className='review-status status-'+status;
+    badge.textContent=({pending:'未回顾',later:'留待下次',reviewed:'已回顾',archived:'已归档'}[status])||'未回顾';
+    small.append(date,badge);
     b.append(strong,small);b.onclick=guarded(()=>select(idea.id));return b;
   }));
   if(!ideas.length){const p=document.createElement('p');p.textContent='暂无记录，或当前点子已回顾。';$('ideaList').append(p);}
